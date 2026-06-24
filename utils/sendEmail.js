@@ -12,7 +12,7 @@ const transporter = nodemailer.createTransport({
 
 async function sendCredentialsEmail(email, firstName, tempPassword, token) {
   // ✅ Points to your real frontend reset-password page
-  const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${token}`;
+  const resetLink = `${process.env.FRONTEND_URL}/auth/reset-password?token=${token}`;
 
   const html = `
     <html>
