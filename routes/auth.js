@@ -7,7 +7,7 @@ const User = require('../models/User');
 const { protect } = require('../middleware/authMiddleware');
 const { sendCredentialsEmail } = require('../utils/sendEmail');
 
-const ACCESS_TOKEN_EXPIRES_IN = '30m'; // mirrors ACCESS_TOKEN_EXPIRE_MINUTES = 30
+const ACCESS_TOKEN_EXPIRES_IN = '30m';
 const RESET_TOKEN_EXPIRES_IN = '30m';
 
 // -----------------------------
@@ -22,7 +22,6 @@ function createAccessToken(user) {
 }
 
 function createResetToken(email) {
-  // purpose claim mirrors the FastAPI token so it can't be reused for login
   return jwt.sign(
     { sub: email, purpose: 'password_reset' },
     process.env.JWT_SECRET,
@@ -31,7 +30,7 @@ function createResetToken(email) {
 }
 
 // -----------------------------
-// Register — generates a temp password, emails it, forces a reset
+// Register
 // -----------------------------
 /**
  * @swagger
@@ -84,7 +83,6 @@ router.post('/register', async (req, res) => {
       return res.status(400).json({ message: 'A profile under this email or username already exists.' });
     }
 
-    // Generate a secure 10-character temporary password, same idea as secrets.token_urlsafe(8)[:10]
     const tempPassword = crypto.randomBytes(8).toString('base64url').slice(0, 10);
     const salt = await bcrypt.genSalt(10);
     const hashedPassword = await bcrypt.hash(tempPassword, salt);
@@ -103,7 +101,6 @@ router.post('/register', async (req, res) => {
 
     const resetToken = createResetToken(newUser.email);
 
-    // Fire-and-forget — don't block the response on email delivery
     sendCredentialsEmail(newUser.email, newUser.firstName, tempPassword, resetToken).catch((err) =>
       console.error('Failed to send credentials email:', err.message)
     );
@@ -119,7 +116,7 @@ router.post('/register', async (req, res) => {
 });
 
 // -----------------------------
-// Reset Password — verifies token, sets new password, clears the forced-reset flag
+// Reset Password
 // -----------------------------
 /**
  * @swagger
@@ -135,17 +132,20 @@ router.post('/register', async (req, res) => {
  *             type: object
  *             required:
  *               - token
- *               - newPassword
+ *               - temp_password
+ *               - new_password
  *             properties:
  *               token:
  *                 type: string
- *               newPassword:
+ *               temp_password:
+ *                 type: string
+ *               new_password:
  *                 type: string
  *     responses:
  *       200:
  *         description: Password updated successfully
  *       400:
- *         description: Invalid or expired token
+ *         description: Invalid or expired token / incorrect temp password
  *       404:
  *         description: User not found
  *       500:
@@ -153,7 +153,7 @@ router.post('/register', async (req, res) => {
  */
 router.post('/reset-password', async (req, res) => {
   try {
-    const { token, newPassword } = req.body;
+    const { token, temp_password, new_password } = req.body;
 
     let payload;
     try {
@@ -171,8 +171,15 @@ router.post('/reset-password', async (req, res) => {
       return res.status(404).json({ message: 'User not found.' });
     }
 
+    // ✅ Verify temp password matches what was emailed
+    const isTempValid = await bcrypt.compare(temp_password, user.password);
+    if (!isTempValid) {
+      return res.status(400).json({ message: 'Temporary password is incorrect.' });
+    }
+
+    // ✅ Set the new password
     const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(newPassword, salt);
+    user.password = await bcrypt.hash(new_password, salt);
     user.isPasswordResetRequired = false;
     await user.save();
 
@@ -221,7 +228,6 @@ router.post('/login', async (req, res) => {
     const user = await User.findOne({ email });
     if (!user) return res.status(401).json({ message: 'Invalid credentials' });
 
-    // Block login until the forced temp-password reset is completed
     if (user.isPasswordResetRequired) {
       return res.status(403).json({
         message: 'Account security reset required. Use /api/auth/reset-password with the token emailed to you before logging in.',
