@@ -5,10 +5,12 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { protect } = require('../middleware/authMiddleware');
+const { authorize } = require('../middleware/authMiddleware');
 const { sendCredentialsEmail } = require('../utils/sendEmail');
 
 const ACCESS_TOKEN_EXPIRES_IN = '30m';
 const RESET_TOKEN_EXPIRES_IN = '30m';
+const VALID_ROLES = ['admin', 'communication_officer', 'broadcast_media', 'social_media_influencer'];
 
 // -----------------------------
 // Token helpers
@@ -30,14 +32,16 @@ function createResetToken(email) {
 }
 
 // -----------------------------
-// Register
+// Register — ADMIN ONLY: creates an account and assigns its role
 // -----------------------------
 /**
  * @swagger
  * /api/auth/register:
  *   post:
- *     summary: Register a new user (system generates a temporary password and emails it)
+ *     summary: Create a new account and assign its role (admin only). System generates a temporary password and emails it.
  *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -49,34 +53,54 @@ function createResetToken(email) {
  *               - email
  *               - firstName
  *               - lastName
+ *               - role
  *             properties:
- *               username:
+ *               username: { type: string }
+ *               email: { type: string }
+ *               firstName: { type: string }
+ *               lastName: { type: string }
+ *               dateOfBirth: { type: string, format: date }
+ *               organization: { type: string }
+ *               organizationLink:
  *                 type: string
- *               email:
+ *                 description: Required when role is broadcast_media
+ *               socialHandle:
  *                 type: string
- *               firstName:
- *                 type: string
- *               lastName:
- *                 type: string
- *               dateOfBirth:
- *                 type: string
- *                 format: date
- *               organization:
- *                 type: string
+ *                 description: Used when role is social_media_influencer
  *               role:
  *                 type: string
- *                 enum: [student, editor, admin]
+ *                 enum: [admin, communication_officer, broadcast_media, social_media_influencer]
  *     responses:
  *       201:
- *         description: Registration complete, credentials emailed to user
+ *         description: Account created, temporary credentials emailed
  *       400:
- *         description: User already exists
+ *         description: User already exists, invalid role, or missing required field for role
+ *       403:
+ *         description: Only admin can create accounts
  *       500:
  *         description: Server error
  */
-router.post('/register', async (req, res) => {
+router.post('/register', protect, authorize('admin'), async (req, res) => {
   try {
-    const { username, email, firstName, lastName, dateOfBirth, organization, role } = req.body;
+    const {
+      username,
+      email,
+      firstName,
+      lastName,
+      dateOfBirth,
+      organization,
+      organizationLink,
+      socialHandle,
+      role,
+    } = req.body;
+
+    if (!VALID_ROLES.includes(role)) {
+      return res.status(400).json({ message: `role must be one of: ${VALID_ROLES.join(', ')}` });
+    }
+
+    if (role === 'broadcast_media' && !organizationLink) {
+      return res.status(400).json({ message: 'organizationLink is required for broadcast_media accounts.' });
+    }
 
     const existingUser = await User.findOne({ $or: [{ email }, { username }] });
     if (existingUser) {
@@ -91,11 +115,14 @@ router.post('/register', async (req, res) => {
       username,
       email,
       password: hashedPassword,
-      role: role || 'student',
+      role,
       firstName,
       lastName,
       dateOfBirth,
       organization,
+      organizationLink,
+      socialHandle,
+      createdBy: req.user.id,
       isPasswordResetRequired: true,
     });
 
@@ -106,7 +133,7 @@ router.post('/register', async (req, res) => {
     );
 
     res.status(201).json({
-      message: 'Registration complete. Temporary credentials and a reset token were sent to your email.',
+      message: 'Account created. Temporary credentials and a reset token were sent to the user\'s email.',
       username: newUser.username,
       role: newUser.role,
     });
@@ -116,7 +143,7 @@ router.post('/register', async (req, res) => {
 });
 
 // -----------------------------
-// Reset Password
+// Reset Password (unchanged)
 // -----------------------------
 /**
  * @swagger
@@ -135,12 +162,9 @@ router.post('/register', async (req, res) => {
  *               - temp_password
  *               - new_password
  *             properties:
- *               token:
- *                 type: string
- *               temp_password:
- *                 type: string
- *               new_password:
- *                 type: string
+ *               token: { type: string }
+ *               temp_password: { type: string }
+ *               new_password: { type: string }
  *     responses:
  *       200:
  *         description: Password updated successfully
@@ -171,13 +195,11 @@ router.post('/reset-password', async (req, res) => {
       return res.status(404).json({ message: 'User not found.' });
     }
 
-    // ✅ Verify temp password matches what was emailed
     const isTempValid = await bcrypt.compare(temp_password, user.password);
     if (!isTempValid) {
       return res.status(400).json({ message: 'Temporary password is incorrect.' });
     }
 
-    // ✅ Set the new password
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(new_password, salt);
     user.isPasswordResetRequired = false;
@@ -190,7 +212,7 @@ router.post('/reset-password', async (req, res) => {
 });
 
 // -----------------------------
-// Login
+// Login (unchanged)
 // -----------------------------
 /**
  * @swagger
@@ -208,10 +230,8 @@ router.post('/reset-password', async (req, res) => {
  *               - email
  *               - password
  *             properties:
- *               email:
- *                 type: string
- *               password:
- *                 type: string
+ *               email: { type: string }
+ *               password: { type: string }
  *     responses:
  *       200:
  *         description: Login successful
@@ -245,7 +265,7 @@ router.post('/login', async (req, res) => {
 });
 
 // -----------------------------
-// Get current user profile
+// Get current user profile (unchanged)
 // -----------------------------
 /**
  * @swagger
@@ -276,7 +296,7 @@ router.get('/me', protect, async (req, res) => {
 });
 
 // -----------------------------
-// Update current user profile
+// Update current user profile (unchanged)
 // -----------------------------
 /**
  * @swagger
@@ -293,8 +313,7 @@ router.get('/me', protect, async (req, res) => {
  *           schema:
  *             type: object
  *             properties:
- *               username:
- *                 type: string
+ *               username: { type: string }
  *     responses:
  *       200:
  *         description: Profile updated successfully

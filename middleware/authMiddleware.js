@@ -1,60 +1,70 @@
 const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 
-// Middleware to protect routes (Requires a valid logged-in user)
-const protect = (req, res, next) => {
+// -----------------------------
+// Core auth: requires a valid, non-expired token
+// -----------------------------
+const protect = async (req, res, next) => {
   let token;
 
   if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-    try {
-      // Get token from header (Format: Bearer <token>)
-      token = req.headers.authorization.split(' ')[1];
-
-      // Verify token
-      const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-      // Attach user data to request object
-      req.user = decoded;
-      next();
-    } catch (error) {
-      return res.status(401).json({ message: 'Not authorized, token invalid or expired' });
-    }
+    token = req.headers.authorization.split(' ')[1];
   }
 
   if (!token) {
     return res.status(401).json({ message: 'Not authorized, no token provided' });
   }
-};
 
-// Middleware to restrict access to Admins only
-const adminOnly = (req, res, next) => {
-  if (req.user && req.user.role === 'admin') {
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Re-check the account is still active — catches accounts deactivated
+    // after the token was issued, without waiting for the token to expire.
+    const user = await User.findById(decoded.id).select('isActive role username');
+    if (!user || !user.isActive) {
+      return res.status(401).json({ message: 'Account is inactive or no longer exists' });
+    }
+
+    req.user = { id: decoded.id, username: decoded.username, role: user.role };
     next();
-  } else {
-    res.status(403).json({ message: 'Access denied. Administrator privileges required.' });
+  } catch (error) {
+    return res.status(401).json({ message: 'Not authorized, token invalid or expired' });
   }
 };
 
-// Middleware to restrict access to Students (or Admins) — e.g. adding books
-const studentOnly = (req, res, next) => {
-  if (req.user && (req.user.role === 'student' || req.user.role === 'admin')) {
-    next();
-  } else {
-    res.status(403).json({ message: 'Access denied. Only students can perform this action.' });
+// -----------------------------
+// Generic role gate — preferred going forward
+// Usage: authorize('admin', 'communication_officer')
+// -----------------------------
+const authorize = (...allowedRoles) => (req, res, next) => {
+  if (!req.user || !allowedRoles.includes(req.user.role)) {
+    return res.status(403).json({ message: 'Access denied. Insufficient role permissions.' });
   }
+  next();
 };
 
-// Middleware to restrict access to Editors (or Admins) — e.g. editing books
-const editorOnly = (req, res, next) => {
-  if (req.user && (req.user.role === 'editor' || req.user.role === 'admin')) {
-    next();
-  } else {
-    res.status(403).json({ message: 'Access denied. Only editors can perform this action.' });
-  }
-};
+// -----------------------------
+// Named convenience wrappers (kept so existing routes using them don't break)
+// -----------------------------
+const adminOnly = authorize('admin');
 
-// Middleware that just confirms the user is authenticated, regardless of role
-// (mirrors require_authenticated in the FastAPI version — useful when a route
-// needs req.user populated but doesn't care which role it is)
+const reviewerOnly = authorize('admin', 'communication_officer'); // approve/reject/publish
+
+const communicationOfficerOnly = authorize('admin', 'communication_officer');
+
+const broadcastMediaOnly = authorize('admin', 'broadcast_media');
+
+const socialMediaInfluencerOnly = authorize('admin', 'social_media_influencer');
+
+// Any of the 4 blog-creating roles
+const creatorOnly = authorize(
+  'admin',
+  'communication_officer',
+  'broadcast_media',
+  'social_media_influencer'
+);
+
+// Just confirms the user is authenticated, regardless of role
 const authenticatedOnly = (req, res, next) => {
   if (req.user) {
     next();
@@ -63,4 +73,14 @@ const authenticatedOnly = (req, res, next) => {
   }
 };
 
-module.exports = { protect, adminOnly, studentOnly, editorOnly, authenticatedOnly };
+module.exports = {
+  protect,
+  authorize,
+  adminOnly,
+  reviewerOnly,
+  communicationOfficerOnly,
+  broadcastMediaOnly,
+  socialMediaInfluencerOnly,
+  creatorOnly,
+  authenticatedOnly,
+};
