@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
 const connectDB = require('./config/db');
+const uploadRoutes = require('./routes/upload');
 
 // Load environment variables
 dotenv.config();
@@ -50,11 +51,17 @@ const swaggerDocs = swaggerJsdoc(swaggerOptions);
 
 // --- API Documentation Route ---
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+app.use('/api/upload', uploadRoutes);
 
 // --- Route Declarations ---
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/blogs', require('./routes/blog'));
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/officer', require('./routes/officer'));
+
+// Global error handler (must be after routes)
+const errorHandler = require('./middleware/errorHandler');
+app.use(errorHandler);
 
 // Baseline health check route
 app.get('/', (req, res) => {

@@ -6,21 +6,29 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { protect } = require('../middleware/authMiddleware');
 const { authorize } = require('../middleware/authMiddleware');
-const { sendCredentialsEmail } = require('../utils/sendEmail');
+const { authLimiter } = require('../middleware/rateLimiter');
+const { sendCredentialsEmail, sendPasswordChangedEmail } = require('../utils/sendEmail');
+const { pickProfileFields, validateRoleSpecificFields } = require('../middleware/validateUserInput');
+const { writeAuditLog } = require('../utils/auditLogger');
 
 const ACCESS_TOKEN_EXPIRES_IN = '30m';
+const REFRESH_TOKEN_EXPIRES_IN = '7d';
 const RESET_TOKEN_EXPIRES_IN = '30m';
 const VALID_ROLES = ['admin', 'communication_officer', 'broadcast_media', 'social_media_influencer'];
 
-// -----------------------------
-// Token helpers
-// -----------------------------
+// ─── Token helpers ─────────────────────────────────────────────────────────────
 function createAccessToken(user) {
   return jwt.sign(
     { id: user._id, username: user.username, role: user.role },
     process.env.JWT_SECRET,
     { expiresIn: ACCESS_TOKEN_EXPIRES_IN }
   );
+}
+
+function createRefreshToken(userId) {
+  // Use a separate secret or the same with distinct payload
+  const raw = crypto.randomBytes(40).toString('hex');
+  return raw; // Raw token sent to client; we store its hash in DB
 }
 
 function createResetToken(email) {
@@ -31,14 +39,12 @@ function createResetToken(email) {
   );
 }
 
-// -----------------------------
-// Register — ADMIN ONLY: creates an account and assigns its role
-// -----------------------------
+// ─── Register (admin only) ─────────────────────────────────────────────────────
 /**
  * @swagger
  * /api/auth/register:
  *   post:
- *     summary: Create a new account and assign its role (admin only). System generates a temporary password and emails it.
+ *     summary: Create a new account and assign its role (admin only)
  *     tags: [Auth]
  *     security:
  *       - bearerAuth: []
@@ -48,12 +54,7 @@ function createResetToken(email) {
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - username
- *               - email
- *               - firstName
- *               - lastName
- *               - role
+ *             required: [username, email, firstName, lastName, role]
  *             properties:
  *               username: { type: string }
  *               email: { type: string }
@@ -61,43 +62,23 @@ function createResetToken(email) {
  *               lastName: { type: string }
  *               dateOfBirth: { type: string, format: date }
  *               organization: { type: string }
- *               organizationLink:
- *                 type: string
- *                 description: Required when role is broadcast_media
- *               socialHandle:
- *                 type: string
- *                 description: Used when role is social_media_influencer
+ *               organizationLink: { type: string, description: "Required when role is broadcast_media" }
+ *               socialHandle: { type: string, description: "Used when role is social_media_influencer" }
  *               role:
  *                 type: string
  *                 enum: [admin, communication_officer, broadcast_media, social_media_influencer]
  *     responses:
- *       201:
- *         description: Account created, temporary credentials emailed
- *       400:
- *         description: User already exists, invalid role, or missing required field for role
- *       403:
- *         description: Only admin can create accounts
- *       500:
- *         description: Server error
+ *       201: { description: Account created }
+ *       400: { description: Validation error }
+ *       403: { description: Admin only }
  */
 router.post('/register', protect, authorize('admin'), async (req, res) => {
   try {
-    const {
-      username,
-      email,
-      firstName,
-      lastName,
-      dateOfBirth,
-      organization,
-      organizationLink,
-      socialHandle,
-      role,
-    } = req.body;
+    const { username, email, firstName, lastName, dateOfBirth, organization, organizationLink, socialHandle, role } = req.body;
 
     if (!VALID_ROLES.includes(role)) {
       return res.status(400).json({ message: `role must be one of: ${VALID_ROLES.join(', ')}` });
     }
-
     if (role === 'broadcast_media' && !organizationLink) {
       return res.status(400).json({ message: 'organizationLink is required for broadcast_media accounts.' });
     }
@@ -112,28 +93,28 @@ router.post('/register', protect, authorize('admin'), async (req, res) => {
     const hashedPassword = await bcrypt.hash(tempPassword, salt);
 
     const newUser = await User.create({
-      username,
-      email,
-      password: hashedPassword,
-      role,
-      firstName,
-      lastName,
-      dateOfBirth,
-      organization,
-      organizationLink,
-      socialHandle,
+      username, email, password: hashedPassword, role, firstName, lastName,
+      dateOfBirth, organization, organizationLink, socialHandle,
       createdBy: req.user.id,
       isPasswordResetRequired: true,
     });
 
     const resetToken = createResetToken(newUser.email);
-
     sendCredentialsEmail(newUser.email, newUser.firstName, tempPassword, resetToken).catch((err) =>
       console.error('Failed to send credentials email:', err.message)
     );
 
+    writeAuditLog({
+      req,
+      action: 'user.create',
+      targetModel: 'User',
+      targetId: newUser._id,
+      targetLabel: newUser.username,
+      detail: { role: newUser.role },
+    });
+
     res.status(201).json({
-      message: 'Account created. Temporary credentials and a reset token were sent to the user\'s email.',
+      message: "Account created. Temporary credentials and a reset token were sent to the user's email.",
       username: newUser.username,
       role: newUser.role,
     });
@@ -142,14 +123,12 @@ router.post('/register', protect, authorize('admin'), async (req, res) => {
   }
 });
 
-// -----------------------------
-// Reset Password (unchanged)
-// -----------------------------
+// ─── Login ─────────────────────────────────────────────────────────────────────
 /**
  * @swagger
- * /api/auth/reset-password:
+ * /api/auth/login:
  *   post:
- *     summary: Verify the emailed reset token and set a new password
+ *     summary: Login — returns access token and refresh token
  *     tags: [Auth]
  *     requestBody:
  *       required: true
@@ -157,27 +136,173 @@ router.post('/register', protect, authorize('admin'), async (req, res) => {
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - token
- *               - temp_password
- *               - new_password
+ *             required: [email, password]
+ *             properties:
+ *               email: { type: string }
+ *               password: { type: string }
+ *     responses:
+ *       200: { description: Login successful }
+ *       401: { description: Invalid credentials }
+ *       403: { description: Account deactivated or password reset required }
+ */
+router.post('/login', authLimiter, async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ message: 'email and password are required' });
+    }
+
+    const user = await User.findOne({ email });
+    if (!user) return res.status(401).json({ message: 'Invalid credentials' });
+
+    if (!user.isActive) {
+      return res.status(403).json({ message: 'This account has been deactivated. Contact an administrator.' });
+    }
+
+    if (user.isPasswordResetRequired) {
+      return res.status(403).json({
+        message: 'Account security reset required. Use /api/auth/reset-password with the token emailed to you before logging in.',
+      });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(401).json({ message: 'Invalid credentials' });
+
+    // Issue tokens
+    const accessToken = createAccessToken(user);
+    const rawRefreshToken = createRefreshToken(user._id);
+    await user.setRefreshToken(rawRefreshToken);
+
+    // Update activity
+    user.lastLoginAt = new Date();
+    user.loginCount = (user.loginCount || 0) + 1;
+    await user.save();
+
+    writeAuditLog({
+      req,
+      action: 'user.login',
+      targetModel: 'User',
+      targetId: user._id,
+      targetLabel: user.username,
+    });
+
+    res.json({
+      accessToken,
+      refreshToken: rawRefreshToken,
+      role: user.role,
+      username: user.username,
+      expiresIn: ACCESS_TOKEN_EXPIRES_IN,
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Refresh Token ─────────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/refresh:
+ *   post:
+ *     summary: Exchange a valid refresh token for a new access token
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [refreshToken, userId]
+ *             properties:
+ *               refreshToken: { type: string }
+ *               userId: { type: string }
+ *     responses:
+ *       200: { description: New access token issued }
+ *       401: { description: Invalid or expired refresh token }
+ */
+router.post('/refresh', async (req, res) => {
+  try {
+    const { refreshToken, userId } = req.body;
+    if (!refreshToken || !userId) {
+      return res.status(400).json({ message: 'refreshToken and userId are required' });
+    }
+
+    const user = await User.findById(userId).select('refreshToken role username isActive');
+    if (!user || !user.isActive) {
+      return res.status(401).json({ message: 'Invalid token or inactive account' });
+    }
+
+    const isValid = await user.compareRefreshToken(refreshToken);
+    if (!isValid) {
+      return res.status(401).json({ message: 'Refresh token is invalid or has expired' });
+    }
+
+    // Issue a new access token (refresh token stays the same until logout)
+    const accessToken = createAccessToken(user);
+    res.json({ accessToken, expiresIn: ACCESS_TOKEN_EXPIRES_IN });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Logout ────────────────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/logout:
+ *   post:
+ *     summary: Logout — clears the stored refresh token
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200: { description: Logged out }
+ */
+router.post('/logout', protect, async (req, res) => {
+  try {
+    await User.findByIdAndUpdate(req.user.id, { refreshToken: null });
+
+    writeAuditLog({
+      req,
+      action: 'user.logout',
+      targetModel: 'User',
+      targetId: req.user.id,
+      targetLabel: req.user.username,
+    });
+
+    res.json({ message: 'Logged out successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Reset Password (temp password flow) ──────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/reset-password:
+ *   post:
+ *     summary: Verify the emailed reset token and set a new permanent password
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token, temp_password, new_password]
  *             properties:
  *               token: { type: string }
  *               temp_password: { type: string }
- *               new_password: { type: string }
+ *               new_password: { type: string, minLength: 8 }
  *     responses:
- *       200:
- *         description: Password updated successfully
- *       400:
- *         description: Invalid or expired token / incorrect temp password
- *       404:
- *         description: User not found
- *       500:
- *         description: Server error
+ *       200: { description: Password updated }
+ *       400: { description: Invalid token or incorrect temp password }
  */
-router.post('/reset-password', async (req, res) => {
+router.post('/reset-password', authLimiter, async (req, res) => {
   try {
     const { token, temp_password, new_password } = req.body;
+
+    if (!new_password || new_password.length < 8) {
+      return res.status(400).json({ message: 'New password must be at least 8 characters.' });
+    }
 
     let payload;
     try {
@@ -191,9 +316,7 @@ router.post('/reset-password', async (req, res) => {
     }
 
     const user = await User.findOne({ email: payload.sub });
-    if (!user) {
-      return res.status(404).json({ message: 'User not found.' });
-    }
+    if (!user) return res.status(404).json({ message: 'User not found.' });
 
     const isTempValid = await bcrypt.compare(temp_password, user.password);
     if (!isTempValid) {
@@ -211,62 +334,72 @@ router.post('/reset-password', async (req, res) => {
   }
 });
 
-// -----------------------------
-// Login (unchanged)
-// -----------------------------
+// ─── Change Password (logged-in user) ─────────────────────────────────────────
 /**
  * @swagger
- * /api/auth/login:
+ * /api/auth/change-password:
  *   post:
- *     summary: Login user and get token
+ *     summary: Change own password (requires current password verification)
  *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - email
- *               - password
+ *             required: [currentPassword, newPassword]
  *             properties:
- *               email: { type: string }
- *               password: { type: string }
+ *               currentPassword: { type: string }
+ *               newPassword: { type: string, minLength: 8 }
  *     responses:
- *       200:
- *         description: Login successful
- *       401:
- *         description: Invalid credentials
- *       403:
- *         description: Password reset required before login
- *       500:
- *         description: Server error
+ *       200: { description: Password changed }
+ *       400: { description: Incorrect current password or weak new password }
  */
-router.post('/login', async (req, res) => {
+router.post('/change-password', protect, async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const user = await User.findOne({ email });
-    if (!user) return res.status(401).json({ message: 'Invalid credentials' });
+    const { currentPassword, newPassword } = req.body;
 
-    if (user.isPasswordResetRequired) {
-      return res.status(403).json({
-        message: 'Account security reset required. Use /api/auth/reset-password with the token emailed to you before logging in.',
-      });
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ message: 'currentPassword and newPassword are required' });
+    }
+    if (newPassword.length < 8) {
+      return res.status(400).json({ message: 'New password must be at least 8 characters.' });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(401).json({ message: 'Invalid credentials' });
+    const user = await User.findById(req.user.id);
+    if (!user) return res.status(404).json({ message: 'User not found' });
 
-    const token = createAccessToken(user);
-    res.json({ token, role: user.role, username: user.username });
+    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: 'Current password is incorrect.' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    user.password = await bcrypt.hash(newPassword, salt);
+    user.refreshToken = null; // Invalidate other sessions
+    await user.save();
+
+    sendPasswordChangedEmail(user.email, user.firstName).catch((err) =>
+      console.error('[Email] Failed to send password-changed alert:', err.message)
+    );
+
+    writeAuditLog({
+      req,
+      action: 'user.password_change',
+      targetModel: 'User',
+      targetId: user._id,
+      targetLabel: user.username,
+    });
+
+    res.json({ message: 'Password changed successfully. All other sessions have been invalidated.' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// -----------------------------
-// Get current user profile (unchanged)
-// -----------------------------
+// ─── Get current user profile ──────────────────────────────────────────────────
 /**
  * @swagger
  * /api/auth/me:
@@ -276,18 +409,12 @@ router.post('/login', async (req, res) => {
  *     security:
  *       - bearerAuth: []
  *     responses:
- *       200:
- *         description: Profile retrieved successfully
- *       401:
- *         description: Unauthorized
- *       404:
- *         description: User not found
- *       500:
- *         description: Server error
+ *       200: { description: Profile retrieved }
+ *       401: { description: Unauthorized }
  */
 router.get('/me', protect, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password');
+    const user = await User.findById(req.user.id).select('-password -refreshToken');
     if (!user) return res.status(404).json({ message: 'User not found' });
     res.json(user);
   } catch (error) {
@@ -295,14 +422,12 @@ router.get('/me', protect, async (req, res) => {
   }
 });
 
-// -----------------------------
-// Update current user profile (unchanged)
-// -----------------------------
+// ─── Update current user profile ──────────────────────────────────────────────
 /**
  * @swagger
  * /api/auth/me:
  *   put:
- *     summary: Update the logged-in user's profile
+ *     summary: Update the logged-in user's own profile fields
  *     tags: [Auth]
  *     security:
  *       - bearerAuth: []
@@ -314,28 +439,32 @@ router.get('/me', protect, async (req, res) => {
  *             type: object
  *             properties:
  *               username: { type: string }
+ *               firstName: { type: string }
+ *               lastName: { type: string }
+ *               socialHandle: { type: string }
+ *               organization: { type: string }
+ *               organizationLink: { type: string }
+ *               dateOfBirth: { type: string, format: date }
  *     responses:
- *       200:
- *         description: Profile updated successfully
- *       401:
- *         description: Unauthorized
- *       404:
- *         description: User not found
- *       500:
- *         description: Server error
+ *       200: { description: Profile updated }
+ *       401: { description: Unauthorized }
  */
 router.put('/me', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    if (req.body.username) user.username = req.body.username;
+    const updates = pickProfileFields(req.body);
+    Object.assign(user, updates);
+
+    validateRoleSpecificFields(user.role, { organizationLink: user.organizationLink });
+
     await user.save();
 
-    const { password, ...safeUser } = user.toObject();
+    const { password, refreshToken, ...safeUser } = user.toObject();
     res.json(safeUser);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(error.statusCode || 500).json({ error: error.message });
   }
 });
 

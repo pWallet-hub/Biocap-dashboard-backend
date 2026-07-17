@@ -36,7 +36,8 @@ const dualStorage = {
 };
 
 const fileFilter = (req, file, cb) => {
-  if (file.fieldname === 'img' && !file.mimetype.startsWith('image/')) {
+  // ◄ UPDATED: Allow both 'img' and our new 'image' field for crops
+  if ((file.fieldname === 'img' || file.fieldname === 'image') && !file.mimetype.startsWith('image/')) {
     return cb(new Error('img must be an image file (jpg, jpeg, png, webp)'), false);
   }
   if (file.fieldname === 'document' && file.mimetype !== 'application/pdf') {
