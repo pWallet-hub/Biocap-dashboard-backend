@@ -1,4 +1,3 @@
-// scripts/seedAdmin.js
 require('dotenv').config();
 require('dotenv').config({ path: '.env.local' }); // Fallback to Next.js env file
 const mongoose = require('mongoose');
@@ -14,49 +13,41 @@ async function seedAdmin() {
 
   const jwtSecret = process.env.JWT_SECRET || 'fallback_secret_key_for_dev_only';
 
+  console.log('🔌 Connecting to database...');
   await mongoose.connect(mongoUri);
-  console.log('🔌 Connected to database...');
 
   const email = 'b.felix@afs-rwanda.org';
-  const tempPassword = 'ChangeMe123!'; 
+  const rawPassword = 'ChangeMe123!'; 
   const salt = await bcrypt.genSalt(10);
-  const hashedPassword = await bcrypt.hash(tempPassword, salt);
+  const hashedPassword = await bcrypt.hash(rawPassword, salt);
 
-  let admin = await User.findOne({ email });
+  // ─── UPSERT ADMIN USER ───────────────────────────────────────────────
+  // Upsert ensures clean updates with NO password expiry or block flags
+  const adminData = {
+    username: 'felix.rugangazi',
+    email,
+    password: hashedPassword,
+    role: 'admin',
+    firstName: 'Felix',
+    lastName: 'Rugangazi',
+    organization: 'afs-rwanda',
+    organizationLink: 'https://afs-rwanda.org',
+    socialHandle: '@felix_rugangazi',
+    dateOfBirth: '1995-05-15',
+    isPasswordResetRequired: false, // 👈 Fixes 403 Forbidden on login
+    isActive: true,                 // 👈 Fixes 403 account disabled check
+    isApproved: true,               // 👈 Fixes 403 approval pending check
+  };
 
-  if (admin) {
-    console.log('⚠️ Admin already exists:', admin.username);
-    
-    // Ensure existing user has isActive, isApproved, correct role, and reset password
-    admin.isActive = true;
-    if ('isApproved' in admin) admin.isApproved = true;
-    admin.role = 'admin';
-    admin.password = hashedPassword;
-    admin.isPasswordResetRequired = true;
-    
-    await admin.save();
-    console.log('🔧 Updated existing admin profile & reset password to default temp password.');
-  } else {
-    admin = await User.create({
-      username: 'felix.rugangazi',
-      email,
-      password: hashedPassword,
-      role: 'admin',
-      firstName: 'Felix',
-      lastName: 'Rugangazi',
-      organization: 'afs-rwanda',
-      organizationLink: 'https://afs-rwanda.org',
-      socialHandle: '@felix_rugangazi',
-      dateOfBirth: '1995-05-15',
-      isPasswordResetRequired: false,
-      isActive: true,
-      isApproved: true,
-    });
+  const admin = await User.findOneAndUpdate(
+    { email },
+    { $set: adminData },
+    { new: true, upsert: true, runValidators: false }
+  );
 
-    console.log('🎉 Seed admin created successfully!');
-  }
+  console.log('🎉 Admin user successfully created/updated in MongoDB!');
 
-  // ─── GENERATE COMPLETE TOKEN PAYLOAD ───────────────────────────────
+  // ─── GENERATE AUTHENTICATION JWT ─────────────────────────────────────
   const payload = {
     id: admin._id.toString(),
     _id: admin._id.toString(),
@@ -72,13 +63,14 @@ async function seedAdmin() {
   });
 
   console.log('\n================================================================');
-  console.log('🔑 YOUR AUTHENTICATION DETAILS');
+  console.log('🔑 YOUR ADMIN LOGIN CREDENTIALS');
   console.log('================================================================');
   console.log(`👤 Username:       ${admin.username}`);
   console.log(`📧 Email:          ${admin.email}`);
-  console.log(`🔓 Password:       ChangeMe123!`);
+  console.log(`🔓 Password:       ${rawPassword}`);
   console.log(`🛡️  Role:           ${admin.role}`);
-  console.log('\n📋 COPY YOUR NEW ENRICHED JWT BEARER TOKEN BELOW:');
+  console.log(`⚡ Password Reset: Disabled (Ready for instant login)`);
+  console.log('\n📋 BEARER TOKEN FOR API TESTING:');
   console.log(`\n${token}\n`);
   console.log('================================================================\n');
 
@@ -87,7 +79,7 @@ async function seedAdmin() {
 }
 
 seedAdmin().catch(async (err) => {
-  console.error('❌ Error seeding and generating token:', err);
+  console.error('❌ Error seeding admin user:', err);
   if (mongoose.connection.readyState !== 0) {
     await mongoose.connection.close();
   }

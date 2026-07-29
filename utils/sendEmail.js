@@ -147,7 +147,7 @@ async function sendBlogApprovalEmail(email, firstName, blogTitle) {
   });
 }
 
-// ─── 3. Blog Rejected Email ───────────────────────────────────────────────────
+// ─── 4. Blog Rejected Email ───────────────────────────────────────────────────
 async function sendBlogRejectionEmail(email, firstName, blogTitle, reviewerNote) {
   const dashboardLink = `${process.env.FRONTEND_URL}/dashboard/my-submissions`;
 
@@ -191,7 +191,7 @@ async function sendBlogRejectionEmail(email, firstName, blogTitle, reviewerNote)
   });
 }
 
-// ─── 4. Blog Published Email ──────────────────────────────────────────────────
+// ─── 5. Blog Published Email ──────────────────────────────────────────────────
 async function sendBlogPublishedEmail(email, firstName, blogTitle, blogSlug) {
   const blogLink = `${process.env.FRONTEND_URL}/blog/${blogSlug}`;
 
@@ -225,7 +225,7 @@ async function sendBlogPublishedEmail(email, firstName, blogTitle, blogSlug) {
   });
 }
 
-// ─── 5. Password Changed Security Alert ──────────────────────────────────────
+// ─── 6. Password Changed Security Alert ──────────────────────────────────────
 async function sendPasswordChangedEmail(email, firstName) {
   const html = wrapHtml(`
     <h3 style="color: #f4b400;">🔒 Security Alert — ${firstName}</h3>
@@ -256,6 +256,7 @@ async function sendPasswordChangedEmail(email, firstName) {
 
 module.exports = {
   sendCredentialsEmail,
+  sendPasswordResetEmail, // ✅ Added missing export!
   sendBlogApprovalEmail,
   sendBlogRejectionEmail,
   sendBlogPublishedEmail,
