@@ -4,18 +4,24 @@ const userController = require('../controllers/userController');
 const officerBlogController = require('../controllers/officerBlogController');
 const blogController = require('../controllers/blogController');
 const { protect, authorize } = require('../middleware/authMiddleware');
-const { uploadBlogFiles } = require('../middleware/upload');
+const upload = require('../middleware/upload');
 const { parseBlogBody } = require('../middleware/validateBlogInput');
 const asyncHandler = require('../utils/asyncHandler');
+const { ROLES } = require('../constants/roles');
 
 router.use(protect);
-router.use(authorize('communication_officer'));
+router.use(authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN));
+
+const blogUploadFields = upload.fields([
+  { name: 'img', maxCount: 1 },
+  { name: 'document', maxCount: 1 },
+]);
 
 /**
  * @swagger
  * tags:
  *   name: Communication Officer
- *   description: Blog review/moderation, user oversight, and own blog management (no publish/delete users)
+ *   description: Blog review/moderation, publishing, user oversight, and blog management
  */
 
 // ─── Officer Dashboard ────────────────────────────────────────────────────────
@@ -119,16 +125,17 @@ router.get('/blogs/:id', asyncHandler(officerBlogController.getBlogById));
  *         multipart/form-data:
  *           schema:
  *             type: object
- *             required: [title, tag, excerpt, modal, img]
+ *             required: [title, tag, excerpt, img]
  *             properties:
  *               title: { type: string }
  *               tag: { type: string }
  *               excerpt: { type: string }
- *               modal: { type: string, description: "JSON-stringified modal object" }
+ *               blocks: { type: string, description: "JSON-stringified blocks array" }
+ *               modal: { type: string, description: "JSON-stringified modal metadata object" }
  *               img: { type: string, format: binary }
  *               document: { type: string, format: binary }
  */
-router.post('/blogs', uploadBlogFiles, parseBlogBody, asyncHandler(blogController.createBlog));
+router.post('/blogs', blogUploadFields, parseBlogBody, asyncHandler(blogController.createBlog));
 
 /**
  * @swagger
@@ -152,11 +159,12 @@ router.post('/blogs', uploadBlogFiles, parseBlogBody, asyncHandler(blogControlle
  *               title: { type: string }
  *               tag: { type: string }
  *               excerpt: { type: string }
+ *               blocks: { type: string, description: "JSON-stringified blocks array" }
  *               modal: { type: string }
  *               img: { type: string, format: binary }
  *               document: { type: string, format: binary }
  */
-router.put('/blogs/:id', uploadBlogFiles, parseBlogBody, asyncHandler(blogController.updateBlog));
+router.put('/blogs/:id', blogUploadFields, parseBlogBody, asyncHandler(blogController.updateBlog));
 
 /**
  * @swagger
@@ -219,6 +227,22 @@ router.patch('/blogs/:id/submit', asyncHandler(blogController.submitBlog));
  *                 description: Required when decision is rejected
  */
 router.patch('/blogs/:id/review', asyncHandler(blogController.reviewBlog));
+
+/**
+ * @swagger
+ * /api/officer/blogs/{id}/publish:
+ *   patch:
+ *     summary: Publish an approved blog post to the live site
+ *     tags: [Communication Officer]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ */
+router.patch('/blogs/:id/publish', asyncHandler(blogController.publishBlog));
 
 /**
  * @swagger

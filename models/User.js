@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const { ROLES, ALL_ROLES, USER_MANAGERS, ROLE_MANAGERS } = require('../constants/roles');
 
 const UserReviewLogSchema = new mongoose.Schema(
   {
@@ -23,9 +24,9 @@ const UserSchema = new mongoose.Schema(
 
     role: {
       type: String,
-      enum: ['admin', 'communication_officer', 'broadcast_media', 'social_media_influencer'],
+      enum: ALL_ROLES,
       required: true,
-      default: 'social_media_influencer',
+      default: ROLES.SOCIAL_MEDIA_CONTENT_CREATOR,
     },
 
     firstName: { type: String, required: true, trim: true },
@@ -35,20 +36,20 @@ const UserSchema = new mongoose.Schema(
     // Profile picture (Cloudinary URL)
     avatar: { type: String, trim: true },
 
-    // For broadcast_media: their organization name + the link shown on published posts
+    // For broadcast_content_creator: organization name + link shown on published posts
     organization: { type: String, trim: true },
     organizationLink: { type: String, trim: true },
 
-    // For social_media_influencer: their default handle, pre-filled on new posts
+    // For social_media_content_creator: default handle pre-filled on new posts
     socialHandle: { type: String, trim: true },
 
-    // Every non-admin account is created by an admin — track who created it
+    // Track creator account if created via admin/officer panel
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 
     // Admin can deactivate an account without deleting it
     isActive: { type: Boolean, default: true },
 
-    // Profile review workflow — communication officers verify external contributors
+    // Profile review workflow — communication officers / admins verify external contributors
     profileReviewStatus: {
       type: String,
       enum: ['pending', 'verified', 'needs_attention'],
@@ -57,8 +58,8 @@ const UserSchema = new mongoose.Schema(
     profileReviewHistory: { type: [UserReviewLogSchema], default: [] },
     lastProfileReviewNote: { type: String, trim: true },
 
-    // True until the user resets the auto-generated temporary password sent at registration
-    isPasswordResetRequired: { type: Boolean, default: true },
+    // Set to true when password expires or when explicit reset is required
+    isPasswordResetRequired: { type: Boolean, default: false },
 
     // Refresh token (stored hashed) — null means user is logged out
     refreshToken: { type: String, default: null },
@@ -76,10 +77,9 @@ UserSchema.index({ profileReviewStatus: 1, role: 1 });
 UserSchema.index({ createdAt: -1 });
 
 // ─── Pre-validate hook ───────────────────────────────────────────────────────
-// Enforce role-specific required fields at the data layer, not just in routes
 UserSchema.pre('validate', function () {
-  if (this.role === 'broadcast_media' && !this.organizationLink) {
-    throw new Error('organizationLink is required for broadcast_media accounts');
+  if (this.role === ROLES.BROADCAST_CONTENT_CREATOR && !this.organizationLink) {
+    throw new Error('organizationLink is required for broadcast_content_creator accounts');
   }
 });
 
@@ -87,7 +87,6 @@ UserSchema.pre('validate', function () {
 
 /**
  * Hashes and sets a new refresh token on this user document.
- * Call user.save() after.
  */
 UserSchema.methods.setRefreshToken = async function (rawToken) {
   const salt = await bcrypt.genSalt(10);
@@ -106,15 +105,33 @@ UserSchema.methods.compareRefreshToken = async function (rawToken) {
  * Returns true if the requesting reviewer's role is allowed to review this profile.
  */
 UserSchema.methods.canBeReviewedBy = function (reviewerRole) {
-  return ['admin', 'communication_officer'].includes(reviewerRole);
+  return USER_MANAGERS.includes(reviewerRole);
 };
 
 /**
- * Returns true if the requesting manager is an admin (the only role that can
- * create, deactivate, delete, or change roles of users).
+ * Returns true if managerRole can perform user management tasks.
  */
 UserSchema.methods.canBeManagedBy = function (managerRole) {
-  return managerRole === 'admin';
+  return USER_MANAGERS.includes(managerRole);
+};
+
+/**
+ * Returns true if user role can be modified by managerRole.
+ */
+UserSchema.methods.canRoleBeChangedBy = function (managerRole) {
+  return ROLE_MANAGERS.includes(managerRole);
+};
+
+/**
+ * Checks if the account has been inactive for longer than maxDays.
+ */
+UserSchema.methods.isPasswordExpired = function (maxDays = 90) {
+  const referenceDate = this.lastLoginAt || this.createdAt;
+  if (!referenceDate) return false;
+
+  const diffInMs = Date.now() - new Date(referenceDate).getTime();
+  const diffInDays = diffInMs / (1000 * 60 * 60 * 24);
+  return diffInDays > maxDays;
 };
 
 module.exports = mongoose.model('User', UserSchema);

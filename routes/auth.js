@@ -5,16 +5,15 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { protect } = require('../middleware/authMiddleware');
-const { authorize } = require('../middleware/authMiddleware');
 const { authLimiter } = require('../middleware/rateLimiter');
-const { sendCredentialsEmail, sendPasswordChangedEmail } = require('../utils/sendEmail');
+const { sendPasswordChangedEmail, sendPasswordResetEmail } = require('../utils/sendEmail');
 const { pickProfileFields, validateRoleSpecificFields } = require('../middleware/validateUserInput');
 const { writeAuditLog } = require('../utils/auditLogger');
+const { ROLES, ALL_ROLES } = require('../constants/roles');
 
 const ACCESS_TOKEN_EXPIRES_IN = '30m';
-const REFRESH_TOKEN_EXPIRES_IN = '7d';
 const RESET_TOKEN_EXPIRES_IN = '30m';
-const VALID_ROLES = ['admin', 'communication_officer', 'broadcast_media', 'social_media_influencer'];
+const PASSWORD_EXPIRY_DAYS = parseInt(process.env.PASSWORD_EXPIRY_DAYS || '90', 10);
 
 // ─── Token helpers ─────────────────────────────────────────────────────────────
 function createAccessToken(user) {
@@ -25,10 +24,8 @@ function createAccessToken(user) {
   );
 }
 
-function createRefreshToken(userId) {
-  // Use a separate secret or the same with distinct payload
-  const raw = crypto.randomBytes(40).toString('hex');
-  return raw; // Raw token sent to client; we store its hash in DB
+function createRefreshToken() {
+  return crypto.randomBytes(40).toString('hex');
 }
 
 function createResetToken(email) {
@@ -39,82 +36,114 @@ function createResetToken(email) {
   );
 }
 
-// ─── Register (admin only) ─────────────────────────────────────────────────────
+/**
+ * @swagger
+ * tags:
+ *   name: Authentication
+ *   description: Public registration, login, token refresh, and password recovery management
+ */
+
+// ─── Register (Public Direct Registration) ─────────────────────────────────────
 /**
  * @swagger
  * /api/auth/register:
  *   post:
- *     summary: Create a new account and assign its role (admin only)
- *     tags: [Auth]
- *     security:
- *       - bearerAuth: []
+ *     summary: Public user registration with own password
+ *     tags: [Authentication]
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required: [username, email, firstName, lastName, role]
+ *             required: [username, email, password, firstName, lastName, role]
  *             properties:
  *               username: { type: string }
  *               email: { type: string }
+ *               password: { type: string, minLength: 8 }
  *               firstName: { type: string }
  *               lastName: { type: string }
- *               dateOfBirth: { type: string, format: date }
- *               organization: { type: string }
- *               organizationLink: { type: string, description: "Required when role is broadcast_media" }
- *               socialHandle: { type: string, description: "Used when role is social_media_influencer" }
  *               role:
  *                 type: string
- *                 enum: [admin, communication_officer, broadcast_media, social_media_influencer]
+ *                 enum: [communication_officer, editor, broadcast_content_creator, social_media_content_creator]
+ *               dateOfBirth: { type: string, format: date }
+ *               organization: { type: string }
+ *               organizationLink: { type: string }
+ *               socialHandle: { type: string }
  *     responses:
- *       201: { description: Account created }
- *       400: { description: Validation error }
- *       403: { description: Admin only }
+ *       201:
+ *         description: Account created successfully
+ *       400:
+ *         description: Validation error or duplicate email/username
+ *       403:
+ *         description: Self-assigning admin role forbidden
  */
-router.post('/register', protect, authorize('admin'), async (req, res) => {
+router.post('/register', authLimiter, async (req, res) => {
   try {
-    const { username, email, firstName, lastName, dateOfBirth, organization, organizationLink, socialHandle, role } = req.body;
+    const {
+      username,
+      email,
+      password,
+      firstName,
+      lastName,
+      dateOfBirth,
+      organization,
+      organizationLink,
+      socialHandle,
+      role,
+    } = req.body;
 
-    if (!VALID_ROLES.includes(role)) {
-      return res.status(400).json({ message: `role must be one of: ${VALID_ROLES.join(', ')}` });
-    }
-    if (role === 'broadcast_media' && !organizationLink) {
-      return res.status(400).json({ message: 'organizationLink is required for broadcast_media accounts.' });
+    if (!password || password.length < 8) {
+      return res.status(400).json({ message: 'Password is required and must be at least 8 characters.' });
     }
 
-    const existingUser = await User.findOne({ $or: [{ email }, { username }] });
+    if (!ALL_ROLES.includes(role)) {
+      return res.status(400).json({ message: `Role must be one of: ${ALL_ROLES.join(', ')}` });
+    }
+
+    if (role === ROLES.ADMIN) {
+      return res.status(403).json({ message: 'Admin role cannot be self-assigned.' });
+    }
+
+    if (role === ROLES.BROADCAST_CONTENT_CREATOR && !organizationLink) {
+      return res.status(400).json({ message: 'organizationLink is required for broadcast_content_creator accounts.' });
+    }
+
+    const existingUser = await User.findOne({ $or: [{ email: email.toLowerCase() }, { username }] });
     if (existingUser) {
       return res.status(400).json({ message: 'A profile under this email or username already exists.' });
     }
 
-    const tempPassword = crypto.randomBytes(8).toString('base64url').slice(0, 10);
     const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(tempPassword, salt);
+    const hashedPassword = await bcrypt.hash(password, salt);
 
     const newUser = await User.create({
-      username, email, password: hashedPassword, role, firstName, lastName,
-      dateOfBirth, organization, organizationLink, socialHandle,
-      createdBy: req.user.id,
-      isPasswordResetRequired: true,
+      username,
+      email: email.toLowerCase(),
+      password: hashedPassword,
+      role,
+      firstName,
+      lastName,
+      dateOfBirth,
+      organization,
+      organizationLink,
+      socialHandle,
+      isPasswordResetRequired: false,
     });
-
-    const resetToken = createResetToken(newUser.email);
-    sendCredentialsEmail(newUser.email, newUser.firstName, tempPassword, resetToken).catch((err) =>
-      console.error('Failed to send credentials email:', err.message)
-    );
 
     writeAuditLog({
       req,
+      actor: newUser._id,
+      actorRole: newUser.role,
       action: 'user.create',
       targetModel: 'User',
       targetId: newUser._id,
       targetLabel: newUser.username,
-      detail: { role: newUser.role },
+      detail: { selfRegistration: true, role: newUser.role },
     });
 
     res.status(201).json({
-      message: "Account created. Temporary credentials and a reset token were sent to the user's email.",
+      message: 'Account created successfully. You can now log in.',
       username: newUser.username,
       role: newUser.role,
     });
@@ -128,8 +157,8 @@ router.post('/register', protect, authorize('admin'), async (req, res) => {
  * @swagger
  * /api/auth/login:
  *   post:
- *     summary: Login — returns access token and refresh token
- *     tags: [Auth]
+ *     summary: User login — returns access token and refresh token
+ *     tags: [Authentication]
  *     requestBody:
  *       required: true
  *       content:
@@ -141,9 +170,12 @@ router.post('/register', protect, authorize('admin'), async (req, res) => {
  *               email: { type: string }
  *               password: { type: string }
  *     responses:
- *       200: { description: Login successful }
- *       401: { description: Invalid credentials }
- *       403: { description: Account deactivated or password reset required }
+ *       200:
+ *         description: Login successful
+ *       401:
+ *         description: Invalid credentials
+ *       403:
+ *         description: Account deactivated or password expired
  */
 router.post('/login', authLimiter, async (req, res) => {
   try {
@@ -152,34 +184,39 @@ router.post('/login', authLimiter, async (req, res) => {
       return res.status(400).json({ message: 'email and password are required' });
     }
 
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email: email.toLowerCase() });
     if (!user) return res.status(401).json({ message: 'Invalid credentials' });
 
     if (!user.isActive) {
       return res.status(403).json({ message: 'This account has been deactivated. Contact an administrator.' });
     }
 
+    if (user.isPasswordExpired(PASSWORD_EXPIRY_DAYS)) {
+      user.isPasswordResetRequired = true;
+      await user.save();
+    }
+
     if (user.isPasswordResetRequired) {
       return res.status(403).json({
-        message: 'Account security reset required. Use /api/auth/reset-password with the token emailed to you before logging in.',
+        message: 'Password expired. Use /api/auth/forgot-password to reset.',
       });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(401).json({ message: 'Invalid credentials' });
 
-    // Issue tokens
     const accessToken = createAccessToken(user);
-    const rawRefreshToken = createRefreshToken(user._id);
+    const rawRefreshToken = createRefreshToken();
     await user.setRefreshToken(rawRefreshToken);
 
-    // Update activity
     user.lastLoginAt = new Date();
     user.loginCount = (user.loginCount || 0) + 1;
     await user.save();
 
     writeAuditLog({
       req,
+      actor: user._id,
+      actorRole: user.role,
       action: 'user.login',
       targetModel: 'User',
       targetId: user._id,
@@ -203,8 +240,8 @@ router.post('/login', authLimiter, async (req, res) => {
  * @swagger
  * /api/auth/refresh:
  *   post:
- *     summary: Exchange a valid refresh token for a new access token
- *     tags: [Auth]
+ *     summary: Exchange a refresh token for a new access token
+ *     tags: [Authentication]
  *     requestBody:
  *       required: true
  *       content:
@@ -216,8 +253,10 @@ router.post('/login', authLimiter, async (req, res) => {
  *               refreshToken: { type: string }
  *               userId: { type: string }
  *     responses:
- *       200: { description: New access token issued }
- *       401: { description: Invalid or expired refresh token }
+ *       200:
+ *         description: Access token renewed
+ *       401:
+ *         description: Invalid refresh token
  */
 router.post('/refresh', async (req, res) => {
   try {
@@ -236,7 +275,6 @@ router.post('/refresh', async (req, res) => {
       return res.status(401).json({ message: 'Refresh token is invalid or has expired' });
     }
 
-    // Issue a new access token (refresh token stays the same until logout)
     const accessToken = createAccessToken(user);
     res.json({ accessToken, expiresIn: ACCESS_TOKEN_EXPIRES_IN });
   } catch (error) {
@@ -249,12 +287,13 @@ router.post('/refresh', async (req, res) => {
  * @swagger
  * /api/auth/logout:
  *   post:
- *     summary: Logout — clears the stored refresh token
- *     tags: [Auth]
+ *     summary: Logout — invalidates session refresh token
+ *     tags: [Authentication]
  *     security:
  *       - bearerAuth: []
  *     responses:
- *       200: { description: Logged out }
+ *       200:
+ *         description: Logged out successfully
  */
 router.post('/logout', protect, async (req, res) => {
   try {
@@ -274,34 +313,85 @@ router.post('/logout', protect, async (req, res) => {
   }
 });
 
-// ─── Reset Password (temp password flow) ──────────────────────────────────────
+// ─── Forgot Password ───────────────────────────────────────────────────────────
 /**
  * @swagger
- * /api/auth/reset-password:
+ * /api/auth/forgot-password:
  *   post:
- *     summary: Verify the emailed reset token and set a new permanent password
- *     tags: [Auth]
+ *     summary: Send password reset token email
+ *     tags: [Authentication]
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required: [token, temp_password, new_password]
+ *             required: [email]
+ *             properties:
+ *               email: { type: string }
+ *     responses:
+ *       200:
+ *         description: Reset email sent if account exists
+ */
+router.post('/forgot-password', authLimiter, async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ message: 'email is required' });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
+    if (!user) {
+      return res.status(200).json({
+        message: 'If an account exists for this email, a password reset link has been sent.',
+      });
+    }
+
+    if (!user.isActive) {
+      return res.status(403).json({ message: 'This account has been deactivated. Contact an administrator.' });
+    }
+
+    const resetToken = createResetToken(user.email);
+    sendPasswordResetEmail(user.email, user.firstName, resetToken).catch((err) =>
+      console.error('[Email] Failed to send password reset email:', err.message)
+    );
+
+    res.status(200).json({
+      message: 'If an account exists for this email, a password reset link has been sent.',
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─── Reset Password ────────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/reset-password:
+ *   post:
+ *     summary: Verify token and set new permanent password
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token, new_password]
  *             properties:
  *               token: { type: string }
- *               temp_password: { type: string }
  *               new_password: { type: string, minLength: 8 }
  *     responses:
- *       200: { description: Password updated }
- *       400: { description: Invalid token or incorrect temp password }
+ *       200:
+ *         description: Password reset successful
  */
 router.post('/reset-password', authLimiter, async (req, res) => {
   try {
-    const { token, temp_password, new_password } = req.body;
+    const { token, new_password } = req.body;
 
-    if (!new_password || new_password.length < 8) {
-      return res.status(400).json({ message: 'New password must be at least 8 characters.' });
+    if (!token || !new_password || new_password.length < 8) {
+      return res.status(400).json({ message: 'Token and a new password (min 8 chars) are required.' });
     }
 
     let payload;
@@ -318,14 +408,10 @@ router.post('/reset-password', authLimiter, async (req, res) => {
     const user = await User.findOne({ email: payload.sub });
     if (!user) return res.status(404).json({ message: 'User not found.' });
 
-    const isTempValid = await bcrypt.compare(temp_password, user.password);
-    if (!isTempValid) {
-      return res.status(400).json({ message: 'Temporary password is incorrect.' });
-    }
-
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(new_password, salt);
     user.isPasswordResetRequired = false;
+    user.refreshToken = null;
     await user.save();
 
     res.json({ message: 'Password updated successfully. You can now log in via /api/auth/login.' });
@@ -334,13 +420,13 @@ router.post('/reset-password', authLimiter, async (req, res) => {
   }
 });
 
-// ─── Change Password (logged-in user) ─────────────────────────────────────────
+// ─── Change Password ──────────────────────────────────────────────────────────
 /**
  * @swagger
  * /api/auth/change-password:
  *   post:
- *     summary: Change own password (requires current password verification)
- *     tags: [Auth]
+ *     summary: Change logged-in user password
+ *     tags: [Authentication]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -354,8 +440,8 @@ router.post('/reset-password', authLimiter, async (req, res) => {
  *               currentPassword: { type: string }
  *               newPassword: { type: string, minLength: 8 }
  *     responses:
- *       200: { description: Password changed }
- *       400: { description: Incorrect current password or weak new password }
+ *       200:
+ *         description: Password updated
  */
 router.post('/change-password', protect, async (req, res) => {
   try {
@@ -378,7 +464,8 @@ router.post('/change-password', protect, async (req, res) => {
 
     const salt = await bcrypt.genSalt(10);
     user.password = await bcrypt.hash(newPassword, salt);
-    user.refreshToken = null; // Invalidate other sessions
+    user.isPasswordResetRequired = false;
+    user.refreshToken = null;
     await user.save();
 
     sendPasswordChangedEmail(user.email, user.firstName).catch((err) =>
@@ -399,18 +486,18 @@ router.post('/change-password', protect, async (req, res) => {
   }
 });
 
-// ─── Get current user profile ──────────────────────────────────────────────────
+// ─── Profile Operations ────────────────────────────────────────────────────────
 /**
  * @swagger
  * /api/auth/me:
  *   get:
- *     summary: Get the logged-in user's profile
- *     tags: [Auth]
+ *     summary: Get logged-in user profile
+ *     tags: [Authentication]
  *     security:
  *       - bearerAuth: []
  *     responses:
- *       200: { description: Profile retrieved }
- *       401: { description: Unauthorized }
+ *       200:
+ *         description: Logged-in user document
  */
 router.get('/me', protect, async (req, res) => {
   try {
@@ -422,32 +509,28 @@ router.get('/me', protect, async (req, res) => {
   }
 });
 
-// ─── Update current user profile ──────────────────────────────────────────────
 /**
  * @swagger
  * /api/auth/me:
  *   put:
- *     summary: Update the logged-in user's own profile fields
- *     tags: [Auth]
+ *     summary: Update own profile
+ *     tags: [Authentication]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
- *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
  *             properties:
- *               username: { type: string }
  *               firstName: { type: string }
  *               lastName: { type: string }
  *               socialHandle: { type: string }
  *               organization: { type: string }
  *               organizationLink: { type: string }
- *               dateOfBirth: { type: string, format: date }
  *     responses:
- *       200: { description: Profile updated }
- *       401: { description: Unauthorized }
+ *       200:
+ *         description: Profile updated
  */
 router.put('/me', protect, async (req, res) => {
   try {

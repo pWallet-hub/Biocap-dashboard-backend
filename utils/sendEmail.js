@@ -76,7 +76,39 @@ async function sendCredentialsEmail(email, firstName, tempPassword, token) {
   });
 }
 
-// ─── 2. Blog Approved Email ───────────────────────────────────────────────────
+// ─── 2. Password Reset Email ────────────────────────────────────────────────
+async function sendPasswordResetEmail(email, firstName, token) {
+  const resetLink = `${process.env.FRONTEND_URL}/auth/reset-password?token=${token}`;
+
+  const html = wrapHtml(`
+    <h3 style="color: #1a73e8;">Password Reset Request</h3>
+    <p>Hello ${firstName || 'there'},</p>
+    <p>We received a request to reset your Biocap password.</p>
+    <p>Click the button below to choose a new password. This link will expire in <strong>30 minutes</strong>.</p>
+
+    <p>
+      <a href="${resetLink}"
+         style="background-color: #1a73e8; color: white; padding: 12px 24px;
+                text-decoration: none; border-radius: 5px; display: inline-block;
+                font-weight: bold; font-size: 15px;">
+        Reset My Password →
+      </a>
+    </p>
+
+    <p style="font-size: 13px; color: #666; margin-top: 25px;">
+      If you did not request this, you can safely ignore this email.
+    </p>
+  `);
+
+  await transporter.sendMail({
+    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
+    to: email,
+    subject: '🔐 Biocap password reset request',
+    html,
+  });
+}
+
+// ─── 3. Blog Approved Email ───────────────────────────────────────────────────
 async function sendBlogApprovalEmail(email, firstName, blogTitle) {
   const dashboardLink = `${process.env.FRONTEND_URL}/dashboard/my-submissions`;
 

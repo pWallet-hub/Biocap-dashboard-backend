@@ -1,12 +1,8 @@
 const mongoose = require('mongoose');
+const { ALL_ROLES } = require('../constants/roles');
 
 /**
  * AuditLog — immutable record of every significant action taken in the system.
- *
- * Rules:
- *  • Never updated or deleted — append-only.
- *  • Written inside the controller that performs the action.
- *  • Failures to write audit logs are logged to console but NEVER throw to the client.
  */
 const AuditLogSchema = new mongoose.Schema(
   {
@@ -18,7 +14,7 @@ const AuditLogSchema = new mongoose.Schema(
     },
     actorRole: {
       type: String,
-      enum: ['admin', 'communication_officer', 'broadcast_media', 'social_media_influencer'],
+      enum: ALL_ROLES,
       required: true,
     },
 

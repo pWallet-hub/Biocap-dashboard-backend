@@ -2,17 +2,17 @@ const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/userController');
 const adminController = require('../controllers/adminController');
-const { protect, adminOnly } = require('../middleware/authMiddleware');
+const { protect, adminOnly, authorize } = require('../middleware/authMiddleware');
 const asyncHandler = require('../utils/asyncHandler');
+const { USER_MANAGERS } = require('../constants/roles');
 
 router.use(protect);
-router.use(adminOnly);
 
 /**
  * @swagger
  * tags:
  *   name: Admin Management
- *   description: Full user lifecycle management and platform oversight (admin only)
+ *   description: Full user lifecycle management and platform oversight
  */
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
@@ -27,22 +27,45 @@ router.use(adminOnly);
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Dashboard data
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 users: { type: object }
- *                 blogs: { type: object }
- *                 pendingUserReviews: { type: integer }
- *                 pendingBlogReviews: { type: integer }
- *                 readyToPublish: { type: integer }
- *                 recentActivity: { type: object }
+ *         description: Dashboard summary data
  */
-router.get('/dashboard', asyncHandler(adminController.getDashboardStats));
+router.get('/dashboard', adminOnly, asyncHandler(adminController.getDashboardStats));
 
 // ─── User Management ──────────────────────────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/admin/users:
+ *   post:
+ *     summary: Create a user account directly with password set (Staff creation)
+ *     tags: [Admin Management]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [username, email, password, firstName, lastName, role]
+ *             properties:
+ *               username: { type: string }
+ *               email: { type: string }
+ *               password: { type: string, minLength: 8 }
+ *               firstName: { type: string }
+ *               lastName: { type: string }
+ *               role:
+ *                 type: string
+ *                 enum: [admin, communication_officer, editor, broadcast_content_creator, social_media_content_creator]
+ *               organization: { type: string }
+ *               organizationLink: { type: string }
+ *               socialHandle: { type: string }
+ *               dateOfBirth: { type: string, format: date }
+ *     responses:
+ *       201:
+ *         description: User created successfully
+ */
+router.post('/users', authorize(...USER_MANAGERS), asyncHandler(adminController.createUser));
 
 /**
  * @swagger
@@ -55,7 +78,9 @@ router.get('/dashboard', asyncHandler(adminController.getDashboardStats));
  *     parameters:
  *       - in: query
  *         name: role
- *         schema: { type: string, enum: [admin, communication_officer, broadcast_media, social_media_influencer] }
+ *         schema:
+ *           type: string
+ *           enum: [admin, communication_officer, editor, broadcast_content_creator, social_media_content_creator]
  *       - in: query
  *         name: isActive
  *         schema: { type: boolean }
@@ -64,15 +89,18 @@ router.get('/dashboard', asyncHandler(adminController.getDashboardStats));
  *         schema: { type: string, enum: [pending, verified, needs_attention] }
  *       - in: query
  *         name: search
- *         schema: { type: string, description: "Search username, email, firstName, lastName" }
+ *         schema: { type: string }
  *       - in: query
  *         name: page
  *         schema: { type: integer }
  *       - in: query
  *         name: limit
  *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: List of users retrieved successfully
  */
-router.get('/users', asyncHandler(userController.listUsers));
+router.get('/users', authorize(...USER_MANAGERS), asyncHandler(userController.listUsers));
 
 /**
  * @swagger
@@ -82,8 +110,11 @@ router.get('/users', asyncHandler(userController.listUsers));
  *     tags: [Admin Management]
  *     security:
  *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Verification queue retrieved successfully
  */
-router.get('/users/review-queue', asyncHandler(userController.getUserReviewQueue));
+router.get('/users/review-queue', authorize(...USER_MANAGERS), asyncHandler(userController.getUserReviewQueue));
 
 /**
  * @swagger
@@ -98,8 +129,11 @@ router.get('/users/review-queue', asyncHandler(userController.getUserReviewQueue
  *         name: id
  *         required: true
  *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: User profile details
  */
-router.get('/users/:id', asyncHandler(userController.getUserById));
+router.get('/users/:id', authorize(...USER_MANAGERS), asyncHandler(userController.getUserById));
 
 /**
  * @swagger
@@ -126,9 +160,14 @@ router.get('/users/:id', asyncHandler(userController.getUserById));
  *               organization: { type: string }
  *               organizationLink: { type: string }
  *               socialHandle: { type: string }
- *               role: { type: string, enum: [admin, communication_officer, broadcast_media, social_media_influencer] }
+ *               role:
+ *                 type: string
+ *                 enum: [admin, communication_officer, editor, broadcast_content_creator, social_media_content_creator]
+ *     responses:
+ *       200:
+ *         description: User updated successfully
  */
-router.put('/users/:id', asyncHandler(adminController.updateUser));
+router.put('/users/:id', adminOnly, asyncHandler(adminController.updateUser));
 
 /**
  * @swagger
@@ -153,12 +192,13 @@ router.put('/users/:id', asyncHandler(adminController.updateUser));
  *             properties:
  *               role:
  *                 type: string
- *                 enum: [admin, communication_officer, broadcast_media, social_media_influencer]
- *               organizationLink:
- *                 type: string
- *                 description: Required when assigning broadcast_media role
+ *                 enum: [admin, communication_officer, editor, broadcast_content_creator, social_media_content_creator]
+ *               organizationLink: { type: string }
+ *     responses:
+ *       200:
+ *         description: Role updated successfully
  */
-router.patch('/users/:id/role', asyncHandler(adminController.changeUserRole));
+router.patch('/users/:id/role', adminOnly, asyncHandler(adminController.changeUserRole));
 
 /**
  * @swagger
@@ -184,11 +224,12 @@ router.patch('/users/:id/role', asyncHandler(adminController.changeUserRole));
  *               decision:
  *                 type: string
  *                 enum: [verified, needs_attention, noted]
- *               note:
- *                 type: string
- *                 description: Required when decision is needs_attention
+ *               note: { type: string }
+ *     responses:
+ *       200:
+ *         description: Profile review recorded
  */
-router.patch('/users/:id/review', asyncHandler(userController.reviewUser));
+router.patch('/users/:id/review', authorize(...USER_MANAGERS), asyncHandler(userController.reviewUser));
 
 /**
  * @swagger
@@ -203,8 +244,11 @@ router.patch('/users/:id/review', asyncHandler(userController.reviewUser));
  *         name: id
  *         required: true
  *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Password reset initiated
  */
-router.post('/users/:id/reset-password', asyncHandler(adminController.resetUserPassword));
+router.post('/users/:id/reset-password', adminOnly, asyncHandler(adminController.resetUserPassword));
 
 /**
  * @swagger
@@ -219,8 +263,11 @@ router.post('/users/:id/reset-password', asyncHandler(adminController.resetUserP
  *         name: id
  *         required: true
  *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: User deactivated
  */
-router.patch('/users/:id/deactivate', asyncHandler(adminController.deactivateUser));
+router.patch('/users/:id/deactivate', adminOnly, asyncHandler(adminController.deactivateUser));
 
 /**
  * @swagger
@@ -235,8 +282,11 @@ router.patch('/users/:id/deactivate', asyncHandler(adminController.deactivateUse
  *         name: id
  *         required: true
  *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: User reactivated
  */
-router.patch('/users/:id/reactivate', asyncHandler(adminController.reactivateUser));
+router.patch('/users/:id/reactivate', adminOnly, asyncHandler(adminController.reactivateUser));
 
 /**
  * @swagger
@@ -251,10 +301,13 @@ router.patch('/users/:id/reactivate', asyncHandler(adminController.reactivateUse
  *         name: id
  *         required: true
  *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: User deleted
  */
-router.delete('/users/:id', asyncHandler(adminController.deleteUser));
+router.delete('/users/:id', adminOnly, asyncHandler(adminController.deleteUser));
 
-// ─── Audit Logs ───────────────────────────────────────────────────────────────
+// ─── Audit Logs (Admin Only) ─────────────────────────────────────────────────
 
 /**
  * @swagger
@@ -267,10 +320,10 @@ router.delete('/users/:id', asyncHandler(adminController.deleteUser));
  *     parameters:
  *       - in: query
  *         name: action
- *         schema: { type: string, description: "Filter by action enum (e.g. blog.publish)" }
+ *         schema: { type: string }
  *       - in: query
  *         name: actor
- *         schema: { type: string, description: "Filter by actor user ID" }
+ *         schema: { type: string }
  *       - in: query
  *         name: targetModel
  *         schema: { type: string, enum: [Blog, User] }
@@ -279,18 +332,21 @@ router.delete('/users/:id', asyncHandler(adminController.deleteUser));
  *         schema: { type: string }
  *       - in: query
  *         name: from
- *         schema: { type: string, format: date, description: "Start of date range" }
+ *         schema: { type: string, format: date }
  *       - in: query
  *         name: to
- *         schema: { type: string, format: date, description: "End of date range" }
+ *         schema: { type: string, format: date }
  *       - in: query
  *         name: page
  *         schema: { type: integer }
  *       - in: query
  *         name: limit
  *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Audit logs list
  */
-router.get('/audit-logs', asyncHandler(adminController.getAuditLogs));
+router.get('/audit-logs', adminOnly, asyncHandler(adminController.getAuditLogs));
 
 /**
  * @swagger
@@ -305,8 +361,11 @@ router.get('/audit-logs', asyncHandler(adminController.getAuditLogs));
  *         name: id
  *         required: true
  *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Blog audit logs
  */
-router.get('/audit-logs/blog/:id', asyncHandler(adminController.getBlogAuditTrail));
+router.get('/audit-logs/blog/:id', adminOnly, asyncHandler(adminController.getBlogAuditTrail));
 
 /**
  * @swagger
@@ -321,7 +380,10 @@ router.get('/audit-logs/blog/:id', asyncHandler(adminController.getBlogAuditTrai
  *         name: id
  *         required: true
  *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: User audit logs
  */
-router.get('/audit-logs/user/:id', asyncHandler(adminController.getUserAuditTrail));
+router.get('/audit-logs/user/:id', adminOnly, asyncHandler(adminController.getUserAuditTrail));
 
 module.exports = router;

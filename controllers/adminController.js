@@ -8,6 +8,7 @@ const { pickProfileFields, validateRole, validateRoleSpecificFields } = require(
 const { sendCredentialsEmail } = require('../utils/sendEmail');
 const { writeAuditLog } = require('../utils/auditLogger');
 const { parsePagination, paginatedResponse } = require('../utils/pagination');
+const { ALL_ROLES, ROLES } = require('../constants/roles');
 
 const RESET_TOKEN_EXPIRES_IN = '30m';
 
@@ -24,6 +25,94 @@ const assertNotSelf = (targetId, requesterId, action) => {
   }
 };
 
+// ─── Admin / Officer Direct User Creation ─────────────────────────────────────
+
+/**
+ * POST /api/admin/users
+ * Admin or Communication Officer creates a user account directly with a password set.
+ */
+exports.createUser = async (req, res) => {
+  try {
+    const {
+      username,
+      email,
+      password,
+      firstName,
+      lastName,
+      role,
+      organization,
+      organizationLink,
+      socialHandle,
+      dateOfBirth,
+    } = req.body;
+
+    if (!username || !email || !password || !firstName || !lastName || !role) {
+      return res.status(400).json({ message: 'username, email, password, firstName, lastName, and role are required.' });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({ message: 'Password must be at least 8 characters long.' });
+    }
+
+    if (!ALL_ROLES.includes(role)) {
+      return res.status(400).json({ message: `Role must be one of: ${ALL_ROLES.join(', ')}` });
+    }
+
+    // Only Admin can assign Admin role to others
+    if (role === ROLES.ADMIN && req.user.role !== ROLES.ADMIN) {
+      return res.status(403).json({ message: 'Only administrators can assign the admin role.' });
+    }
+
+    if (role === ROLES.BROADCAST_CONTENT_CREATOR && !organizationLink) {
+      return res.status(400).json({ message: 'organizationLink is required for broadcast_content_creator accounts.' });
+    }
+
+    const existingUser = await User.findOne({ $or: [{ email: email.toLowerCase() }, { username }] });
+    if (existingUser) {
+      return res.status(400).json({ message: 'A profile under this email or username already exists.' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    const newUser = await User.create({
+      username,
+      email: email.toLowerCase(),
+      password: hashedPassword,
+      role,
+      firstName,
+      lastName,
+      dateOfBirth,
+      organization,
+      organizationLink,
+      socialHandle,
+      createdBy: req.user.id,
+      isPasswordResetRequired: false,
+    });
+
+    writeAuditLog({
+      req,
+      action: 'user.create',
+      targetModel: 'User',
+      targetId: newUser._id,
+      targetLabel: newUser.username,
+      detail: { createdByStaff: true, role: newUser.role },
+    });
+
+    res.status(201).json({
+      message: 'User created successfully.',
+      user: {
+        id: newUser._id,
+        username: newUser.username,
+        email: newUser.email,
+        role: newUser.role,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 // ─── User CRUD ────────────────────────────────────────────────────────────────
 
 exports.updateUser = async (req, res) => {
@@ -34,7 +123,7 @@ exports.updateUser = async (req, res) => {
 
   if (req.body.role) {
     validateRole(req.body.role);
-    if (req.params.id === req.user.id && req.body.role !== 'admin') {
+    if (req.params.id === req.user.id && req.body.role !== ROLES.ADMIN) {
       return res.status(400).json({ error: 'You cannot remove your own admin role' });
     }
     updates.role = req.body.role;
@@ -66,17 +155,17 @@ exports.changeUserRole = async (req, res) => {
   const { role, organizationLink } = req.body;
   validateRole(role);
 
-  if (req.params.id === req.user.id && role !== 'admin') {
+  if (req.params.id === req.user.id && role !== ROLES.ADMIN) {
     return res.status(400).json({ error: 'You cannot remove your own admin role' });
   }
 
   const user = await User.findById(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  if (role === 'broadcast_media' && !organizationLink && !user.organizationLink) {
+  if (role === ROLES.BROADCAST_CONTENT_CREATOR && !organizationLink && !user.organizationLink) {
     return res
       .status(400)
-      .json({ error: 'organizationLink is required when assigning the broadcast_media role' });
+      .json({ error: 'organizationLink is required when assigning the broadcast_content_creator role' });
   }
 
   const previousRole = user.role;
@@ -135,7 +224,11 @@ exports.deleteUser = async (req, res) => {
   const user = await User.findById(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  const publishedCount = await Blog.countDocuments({ author: user._id, status: 'published' });
+  const publishedCount = await Blog.countDocuments({
+    $or: [{ originalAuthor: user._id }, { author: user._id }],
+    status: 'published',
+  });
+
   if (publishedCount > 0) {
     return res.status(400).json({
       error: 'Cannot delete a user with published blogs. Deactivate the account or reassign content first.',
@@ -143,7 +236,10 @@ exports.deleteUser = async (req, res) => {
     });
   }
 
-  await Blog.deleteMany({ author: user._id, status: { $ne: 'published' } });
+  await Blog.deleteMany({
+    $or: [{ originalAuthor: user._id }, { author: user._id }],
+    status: { $ne: 'published' },
+  });
   await user.deleteOne();
 
   writeAuditLog({
@@ -165,7 +261,7 @@ exports.resetUserPassword = async (req, res) => {
   const salt = await bcrypt.genSalt(10);
   user.password = await bcrypt.hash(tempPassword, salt);
   user.isPasswordResetRequired = true;
-  user.refreshToken = null; // Invalidate any active sessions
+  user.refreshToken = null;
   await user.save();
 
   const resetToken = createResetToken(user.email);
@@ -206,11 +302,10 @@ exports.getDashboardStats = async (req, res) => {
       },
     ]),
     User.countDocuments({
-      role: { $in: ['broadcast_media', 'social_media_influencer'] },
+      role: { $in: EXTERNAL_CREATORS },
       profileReviewStatus: { $in: ['pending', 'needs_attention'] },
       isActive: true,
     }),
-    // Last 5 users who logged in
     User.find({ lastLoginAt: { $exists: true } })
       .select('username firstName lastName role lastLoginAt loginCount')
       .sort({ lastLoginAt: -1 })
@@ -222,7 +317,6 @@ exports.getDashboardStats = async (req, res) => {
   );
   const blogsByStatus = Object.fromEntries(blogStats.map((s) => [s._id, s.count]));
 
-  // Count total deleted blogs
   const deletedBlogs = await Blog.countDocuments({ isDeleted: true });
 
   res.json({
@@ -242,10 +336,6 @@ exports.getDashboardStats = async (req, res) => {
 
 // ─── Audit log queries (admin only) ──────────────────────────────────────────
 
-/**
- * GET /api/admin/audit-logs
- * Full paginated audit trail with filters.
- */
 exports.getAuditLogs = async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
   const filter = {};
@@ -273,10 +363,6 @@ exports.getAuditLogs = async (req, res) => {
   res.json(paginatedResponse(logs, total, { page, limit }));
 };
 
-/**
- * GET /api/admin/audit-logs/blog/:id
- * Full history of changes to a specific blog.
- */
 exports.getBlogAuditTrail = async (req, res) => {
   const logs = await AuditLog.find({ targetModel: 'Blog', targetId: req.params.id })
     .sort({ timestamp: -1 })
@@ -285,10 +371,6 @@ exports.getBlogAuditTrail = async (req, res) => {
   res.json({ count: logs.length, logs });
 };
 
-/**
- * GET /api/admin/audit-logs/user/:id
- * Full history of changes involving a specific user.
- */
 exports.getUserAuditTrail = async (req, res) => {
   const [asTarget, asActor] = await Promise.all([
     AuditLog.find({ targetModel: 'User', targetId: req.params.id })

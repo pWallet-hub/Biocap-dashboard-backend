@@ -1,7 +1,7 @@
 const Blog = require('../models/Blog');
 const User = require('../models/User');
 const cloudinary = require('../config/cloudinary');
-const { REVIEWERS, CREATORS, isReviewer } = require('../constants/roles');
+const { REVIEWERS, CREATORS, isReviewer, ROLES } = require('../constants/roles');
 const { parsePagination, paginatedResponse } = require('../utils/pagination');
 const { generateSlug } = require('../utils/slugify');
 const { writeAuditLog } = require('../utils/auditLogger');
@@ -21,12 +21,11 @@ const destroyAsset = async (publicId, resourceType = 'image') => {
 };
 
 const buildBlogFilter = (query, user) => {
-  // Soft-deleted blogs are invisible to everyone except through the admin trash route
   const filter = { isDeleted: false };
 
   if (!isReviewer(user.role)) {
-    // Regular creators only see their own blogs
-    filter.author = user.id;
+    // External creators only see their own blogs
+    filter.$or = [{ originalAuthor: user.id }, { author: user.id }];
   }
 
   if (query.status) filter.status = query.status;
@@ -44,6 +43,7 @@ const buildBlogFilter = (query, user) => {
 /**
  * GET /api/blogs/public
  * Paginated list of all published blogs for the public website.
+ * Uses originalAuthor for the displayed byline.
  */
 exports.getPublicBlogs = async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
@@ -57,25 +57,33 @@ exports.getPublicBlogs = async (req, res) => {
       .sort({ publishedAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('author', 'firstName lastName username'),
+      .populate('originalAuthor', 'firstName lastName username socialHandle organizationLink'),
     Blog.countDocuments(filter),
   ]);
 
-  const formatted = blogs.map((b) => ({
-    _id: b._id,
-    slug: b.slug,
-    title: b.title,
-    img: b.img,
-    tag: b.tag,
-    excerpt: b.excerpt,
-    modal: b.modal,
-    views: b.views,
-    documentUrl: b.documentUrl || null,
-    documentName: b.documentName || null,
-    publishedWith: `${b.author.firstName} ${b.author.lastName} on ${b.publishedAt.toLocaleDateString('en-GB')}`,
-    link: b.authorRole === 'broadcast_media' ? b.organizationLink : b.socialHandle,
-    publishedAt: b.publishedAt,
-  }));
+  const formatted = blogs.map((b) => {
+    const creator = b.originalAuthor;
+    const authorName = creator ? `${creator.firstName} ${creator.lastName}` : 'Anonymous';
+    const publishedDate = b.publishedAt ? b.publishedAt.toLocaleDateString('en-GB') : '';
+
+    return {
+      _id: b._id,
+      slug: b.slug,
+      title: b.title,
+      img: b.img,
+      tag: b.tag,
+      excerpt: b.excerpt,
+      blocks: b.blocks || [],
+      modal: b.modal || {},
+      views: b.views,
+      documentUrl: b.documentUrl || null,
+      documentName: b.documentName || null,
+      originalAuthor: creator,
+      publishedWith: `${authorName} on ${publishedDate}`,
+      link: b.originalAuthorRole === ROLES.BROADCAST_CONTENT_CREATOR ? b.organizationLink : b.socialHandle,
+      publishedAt: b.publishedAt,
+    };
+  });
 
   res.json(paginatedResponse(formatted, total, { page, limit }));
 };
@@ -83,16 +91,25 @@ exports.getPublicBlogs = async (req, res) => {
 /**
  * GET /api/blogs/public/:slug
  * Single published blog by URL slug — increments view counter.
+ * Returns populated originalAuthor and omits author if different.
  */
 exports.getPublicBlogBySlug = async (req, res) => {
   const blog = await Blog.findOneAndUpdate(
     { slug: req.params.slug, status: 'published', isDeleted: false },
     { $inc: { views: 1 } },
     { new: true }
-  ).populate('author', 'firstName lastName username socialHandle organization organizationLink');
+  ).populate('originalAuthor', 'firstName lastName username socialHandle organization organizationLink');
 
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
-  res.json(blog);
+
+  const blogObj = blog.toObject();
+  
+  // Omit staff/editor 'author' field from public view if different from creator
+  if (blogObj.author && blogObj.originalAuthor && blogObj.author.toString() !== blogObj.originalAuthor._id.toString()) {
+    delete blogObj.author;
+  }
+
+  res.json(blogObj);
 };
 
 // ─── Authenticated list / detail ──────────────────────────────────────────────
@@ -110,6 +127,7 @@ exports.getBlogs = async (req, res) => {
       .sort({ updatedAt: -1 })
       .skip(skip)
       .limit(limit)
+      .populate('originalAuthor', 'username email role firstName lastName')
       .populate('author', 'username email role firstName lastName')
       .populate('publishedBy', 'username firstName lastName')
       .populate('reviewHistory.reviewer', 'username firstName lastName'),
@@ -121,11 +139,14 @@ exports.getBlogs = async (req, res) => {
 
 /**
  * GET /api/blogs/my-submissions
- * Lightweight status tracker for external contributors.
+ * Status tracker for external contributors.
  */
 exports.getMySubmissions = async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
-  const filter = { author: req.user.id, isDeleted: false };
+  const filter = {
+    $or: [{ originalAuthor: req.user.id }, { author: req.user.id }],
+    isDeleted: false,
+  };
   if (req.query.status) filter.status = req.query.status;
 
   const [blogs, total] = await Promise.all([
@@ -142,17 +163,21 @@ exports.getMySubmissions = async (req, res) => {
 
 /**
  * GET /api/blogs/:id
- * Full blog detail — visible to reviewers and the blog's own author.
+ * Full blog detail.
  */
 exports.getBlogById = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false })
+    .populate('originalAuthor', 'username email role firstName lastName socialHandle organization organizationLink')
     .populate('author', 'username email role firstName lastName socialHandle organization organizationLink')
     .populate('publishedBy', 'username firstName lastName')
     .populate('reviewHistory.reviewer', 'username firstName lastName role');
 
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
 
-  const isOwner = blog.author._id.toString() === req.user.id;
+  const isOwner =
+    (blog.originalAuthor && blog.originalAuthor._id.toString() === req.user.id) ||
+    (blog.author && blog.author._id.toString() === req.user.id);
+
   if (!isReviewer(req.user.role) && !isOwner) {
     return res.status(403).json({ error: 'Forbidden' });
   }
@@ -162,14 +187,10 @@ exports.getBlogById = async (req, res) => {
 
 // ─── Blog stats ───────────────────────────────────────────────────────────────
 
-/**
- * GET /api/blogs/stats
- * Blog counts by status — scoped to the requester's visible set.
- */
 exports.getBlogStats = async (req, res) => {
   const baseFilter = isReviewer(req.user.role)
     ? { isDeleted: false }
-    : { author: req.user.id, isDeleted: false };
+    : { $or: [{ originalAuthor: req.user.id }, { author: req.user.id }], isDeleted: false };
 
   const [stats, deletedCount] = await Promise.all([
     Blog.aggregate([
@@ -195,7 +216,7 @@ exports.getBlogStats = async (req, res) => {
 
 /**
  * POST /api/blogs
- * Create a new blog as a draft. Always starts in draft status.
+ * Create a new blog with blocks[] array & frozen originalAuthor fields.
  */
 exports.createBlog = async (req, res) => {
   const imgFile = req.files?.img?.[0];
@@ -205,10 +226,10 @@ exports.createBlog = async (req, res) => {
     return res.status(400).json({ error: 'A cover image is required' });
   }
 
-  const { title, tag, excerpt, socialHandle, organizationLink, modal } = req.parsedBody;
+  const { title, tag, excerpt, socialHandle, organizationLink, modal, blocks } = req.parsedBody;
 
-  if (!title || !tag || !excerpt || !modal?.intro) {
-    return res.status(400).json({ error: 'title, tag, excerpt, and modal.intro are required' });
+  if (!title || !tag || !excerpt) {
+    return res.status(400).json({ error: 'title, tag, and excerpt are required' });
   }
 
   const author = await User.findById(req.user.id).select('socialHandle organizationLink role');
@@ -219,7 +240,8 @@ exports.createBlog = async (req, res) => {
     slug,
     tag,
     excerpt,
-    modal,
+    blocks: blocks || [],
+    modal: modal || {},
     socialHandle: socialHandle || author?.socialHandle,
     organizationLink: organizationLink || author?.organizationLink,
     img: imgFile.path,
@@ -229,6 +251,8 @@ exports.createBlog = async (req, res) => {
       documentPublicId: docFile.filename,
       documentName: docFile.originalname,
     }),
+    originalAuthor: req.user.id,
+    originalAuthorRole: req.user.role,
     author: req.user.id,
     authorRole: req.user.role,
     status: 'draft',
@@ -247,7 +271,7 @@ exports.createBlog = async (req, res) => {
 
 /**
  * PUT /api/blogs/:id
- * Update a blog. Permission rules enforced by canBeEditedBy().
+ * Updates blog content & blocks. originalAuthor remains unchanged; author is set to last editor.
  */
 exports.updateBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
@@ -262,12 +286,11 @@ exports.updateBlog = async (req, res) => {
     });
   }
 
-  const { title, tag, excerpt, socialHandle, organizationLink, modal } = req.parsedBody;
+  const { title, tag, excerpt, socialHandle, organizationLink, modal, blocks } = req.parsedBody;
 
   const prevTitle = blog.title;
   if (title) {
     blog.title = title;
-    // Regenerate slug only if the title actually changed
     if (title !== prevTitle) {
       blog.slug = await generateSlug(title, blog._id);
     }
@@ -277,6 +300,11 @@ exports.updateBlog = async (req, res) => {
   if (socialHandle) blog.socialHandle = socialHandle;
   if (organizationLink) blog.organizationLink = organizationLink;
   if (modal) blog.modal = modal;
+  if (blocks) blog.blocks = blocks;
+
+  // Track last editor
+  blog.author = req.user.id;
+  blog.authorRole = req.user.role;
 
   const imgFile = req.files?.img?.[0];
   const docFile = req.files?.document?.[0];
@@ -307,11 +335,6 @@ exports.updateBlog = async (req, res) => {
   res.json(blog);
 };
 
-/**
- * DELETE /api/blogs/:id
- * Soft-delete a blog (marks isDeleted=true, keeps Cloudinary assets).
- * Published blogs require admin. Hard delete is a separate admin-only endpoint.
- */
 exports.deleteBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
@@ -342,10 +365,6 @@ exports.deleteBlog = async (req, res) => {
   res.json({ message: 'Blog removed. It can be restored by an admin.' });
 };
 
-/**
- * PATCH /api/blogs/:id/restore   (admin only)
- * Un-soft-deletes a blog, returning it to its previous status.
- */
 exports.restoreBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: true });
   if (!blog) return res.status(404).json({ error: 'Blog not found in trash' });
@@ -354,7 +373,6 @@ exports.restoreBlog = async (req, res) => {
   blog.deletedAt = undefined;
   blog.deletedBy = undefined;
 
-  // Restored published blogs go back to approved so admin can re-publish intentionally
   if (blog.status === 'published') blog.status = 'approved';
 
   await blog.save();
@@ -370,10 +388,6 @@ exports.restoreBlog = async (req, res) => {
   res.json({ message: 'Blog restored successfully', blog });
 };
 
-/**
- * DELETE /api/blogs/:id/hard   (admin only)
- * Permanently removes a soft-deleted blog and its Cloudinary assets.
- */
 exports.hardDeleteBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: true });
   if (!blog) {
@@ -395,10 +409,6 @@ exports.hardDeleteBlog = async (req, res) => {
   res.json({ message: 'Blog permanently deleted' });
 };
 
-/**
- * GET /api/blogs/trash   (admin only)
- * List all soft-deleted blogs.
- */
 exports.getDeletedBlogs = async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
 
@@ -407,7 +417,7 @@ exports.getDeletedBlogs = async (req, res) => {
       .sort({ deletedAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('author', 'username firstName lastName')
+      .populate('originalAuthor', 'username firstName lastName')
       .populate('deletedBy', 'username firstName lastName'),
     Blog.countDocuments({ isDeleted: true }),
   ]);
@@ -417,15 +427,13 @@ exports.getDeletedBlogs = async (req, res) => {
 
 // ─── Workflow actions ──────────────────────────────────────────────────────────
 
-/**
- * PATCH /api/blogs/:id/submit
- * Submit (or resubmit) a draft blog for review.
- */
 exports.submitBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
 
-  if (blog.author.toString() !== req.user.id) {
+  const isCreator =
+    blog.originalAuthor.toString() === req.user.id || blog.author.toString() === req.user.id;
+  if (!isCreator) {
     return res.status(403).json({ error: 'You can only submit your own blog' });
   }
   if (blog.status !== 'draft') {
@@ -453,10 +461,6 @@ exports.submitBlog = async (req, res) => {
   });
 };
 
-/**
- * PATCH /api/blogs/:id/review   (admin + communication_officer)
- * Approve or reject a pending blog. Sends email to the author.
- */
 exports.reviewBlog = async (req, res) => {
   const { decision, note } = req.body;
 
@@ -468,7 +472,7 @@ exports.reviewBlog = async (req, res) => {
   }
 
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false }).populate(
-    'author',
+    'originalAuthor',
     'email firstName'
   );
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
@@ -489,15 +493,16 @@ exports.reviewBlog = async (req, res) => {
 
   await blog.save();
 
-  // Non-blocking email notification to author
-  if (decision === 'approved') {
-    sendBlogApprovalEmail(blog.author.email, blog.author.firstName, blog.title).catch((err) =>
-      console.error('[Email] Failed to send approval email:', err.message)
-    );
-  } else {
-    sendBlogRejectionEmail(blog.author.email, blog.author.firstName, blog.title, note).catch((err) =>
-      console.error('[Email] Failed to send rejection email:', err.message)
-    );
+  if (blog.originalAuthor?.email) {
+    if (decision === 'approved') {
+      sendBlogApprovalEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title).catch((err) =>
+        console.error('[Email] Failed to send approval email:', err.message)
+      );
+    } else {
+      sendBlogRejectionEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title, note).catch((err) =>
+        console.error('[Email] Failed to send rejection email:', err.message)
+      );
+    }
   }
 
   writeAuditLog({
@@ -512,19 +517,15 @@ exports.reviewBlog = async (req, res) => {
   res.json({
     message:
       decision === 'approved'
-        ? 'Blog approved. It now awaits publishing by an admin.'
+        ? 'Blog approved. It now awaits publishing by an authorized publisher.'
         : 'Blog rejected and returned to draft with your comment.',
     blog,
   });
 };
 
-/**
- * PATCH /api/blogs/:id/publish   (ADMIN ONLY)
- * Publishes an approved blog to the live website.
- */
 exports.publishBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false }).populate(
-    'author',
+    'originalAuthor',
     'email firstName'
   );
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
@@ -537,10 +538,11 @@ exports.publishBlog = async (req, res) => {
   blog.publishedBy = req.user.id;
   await blog.save();
 
-  // Notify author that their post is now live
-  sendBlogPublishedEmail(blog.author.email, blog.author.firstName, blog.title, blog.slug).catch(
-    (err) => console.error('[Email] Failed to send published email:', err.message)
-  );
+  if (blog.originalAuthor?.email) {
+    sendBlogPublishedEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title, blog.slug).catch(
+      (err) => console.error('[Email] Failed to send published email:', err.message)
+    );
+  }
 
   writeAuditLog({
     req,
@@ -553,10 +555,6 @@ exports.publishBlog = async (req, res) => {
   res.json({ message: 'Blog is now live on the website', blog });
 };
 
-/**
- * PATCH /api/blogs/:id/unpublish   (admin + communication_officer)
- * Removes a published blog from the live website (returns to approved).
- */
 exports.unpublishBlog = async (req, res) => {
   const { note } = req.body;
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
@@ -594,6 +592,5 @@ exports.unpublishBlog = async (req, res) => {
   });
 };
 
-// Re-export role constants so routes can import from here
 exports.REVIEWERS = REVIEWERS;
 exports.CREATORS = CREATORS;

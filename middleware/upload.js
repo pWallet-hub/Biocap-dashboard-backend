@@ -22,8 +22,7 @@ const pdfStorage = new CloudinaryStorage({
   },
 });
 
-// multer-storage-cloudinary only supports one storage engine per multer instance,
-// so this wrapper routes each incoming file to the right storage based on its field name.
+// Wrapper to route files based on field name
 const dualStorage = {
   _handleFile(req, file, cb) {
     const target = file.fieldname === 'document' ? pdfStorage : imageStorage;
@@ -36,7 +35,6 @@ const dualStorage = {
 };
 
 const fileFilter = (req, file, cb) => {
-  // ◄ UPDATED: Allow both 'img' and our new 'image' field for crops
   if ((file.fieldname === 'img' || file.fieldname === 'image') && !file.mimetype.startsWith('image/')) {
     return cb(new Error('img must be an image file (jpg, jpeg, png, webp)'), false);
   }
@@ -52,10 +50,13 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max per file
 });
 
-// Accepts one cover image ("img") and one optional PDF ("document") in the same request
+// Middleware for parsing cover image + attachment document
 const uploadBlogFiles = upload.fields([
   { name: 'img', maxCount: 1 },
   { name: 'document', maxCount: 1 },
 ]);
 
-module.exports = { upload, uploadBlogFiles };
+// Export raw upload as main export while attaching named exports
+module.exports = upload;
+module.exports.upload = upload;
+module.exports.uploadBlogFiles = uploadBlogFiles;

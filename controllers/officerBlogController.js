@@ -2,20 +2,8 @@ const Blog = require('../models/Blog');
 const User = require('../models/User');
 const { parsePagination, paginatedResponse } = require('../utils/pagination');
 const { writeAuditLog } = require('../utils/auditLogger');
-
-/**
- * Officer Blog Controller
- *
- * Communication officers have dedicated blog endpoints that clearly separate their
- * access from the general /api/blogs routes. Officers can:
- *  ✅ List all blogs across all statuses
- *  ✅ View any single blog
- *  ✅ Create and manage their own blogs
- *  ✅ Review (approve/reject) pending blogs
- *  ✅ Unpublish blogs
- *  ❌ Cannot publish blogs (admin-only action)
- *  ❌ Cannot hard-delete or restore blogs
- */
+const { EXTERNAL_CREATORS } = require('../constants/roles');
+const mongoose = require('mongoose');
 
 /**
  * GET /api/officer/blogs
@@ -34,6 +22,7 @@ exports.listBlogs = async (req, res) => {
       .sort({ updatedAt: -1 })
       .skip(skip)
       .limit(limit)
+      .populate('originalAuthor', 'username email role firstName lastName')
       .populate('author', 'username email role firstName lastName')
       .populate('publishedBy', 'username firstName lastName')
       .populate('reviewHistory.reviewer', 'username firstName lastName'),
@@ -45,7 +34,7 @@ exports.listBlogs = async (req, res) => {
 
 /**
  * GET /api/officer/blogs/stats
- * Blog counts by status — officer view (all blogs).
+ * Blog counts by status.
  */
 exports.getBlogStats = async (req, res) => {
   const stats = await Blog.aggregate([
@@ -66,16 +55,17 @@ exports.getBlogStats = async (req, res) => {
 
 /**
  * GET /api/officer/blogs/review-queue
- * Blogs awaiting review, ordered oldest-first (FIFO processing).
+ * Blogs awaiting review, ordered oldest-first.
  */
 exports.getReviewQueue = async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
 
   const [blogs, total] = await Promise.all([
     Blog.find({ status: 'pending_review', isDeleted: false })
-      .sort({ submittedAt: 1 }) // Oldest first
+      .sort({ submittedAt: 1 })
       .skip(skip)
       .limit(limit)
+      .populate('originalAuthor', 'username firstName lastName role email profileReviewStatus')
       .populate('author', 'username firstName lastName role email profileReviewStatus'),
     Blog.countDocuments({ status: 'pending_review', isDeleted: false }),
   ]);
@@ -89,6 +79,7 @@ exports.getReviewQueue = async (req, res) => {
  */
 exports.getBlogById = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false })
+    .populate('originalAuthor', 'username email role firstName lastName socialHandle organization organizationLink profileReviewStatus')
     .populate('author', 'username email role firstName lastName socialHandle organization organizationLink profileReviewStatus')
     .populate('publishedBy', 'username firstName lastName')
     .populate('reviewHistory.reviewer', 'username firstName lastName role');
@@ -99,13 +90,15 @@ exports.getBlogById = async (req, res) => {
 
 /**
  * GET /api/officer/dashboard
- * Officer-scoped dashboard: pending blog reviews, user review queue, blog stats.
+ * Dashboard metrics for staff officers.
  */
 exports.getDashboard = async (req, res) => {
+  const userId = mongoose.Types.ObjectId.createFromHexString(req.user.id);
+
   const [pendingBlogs, reviewQueue, blogStats, myBlogStats] = await Promise.all([
     Blog.countDocuments({ status: 'pending_review', isDeleted: false }),
     User.countDocuments({
-      role: { $in: ['broadcast_media', 'social_media_influencer'] },
+      role: { $in: EXTERNAL_CREATORS },
       profileReviewStatus: { $in: ['pending', 'needs_attention'] },
       isActive: true,
     }),
@@ -113,9 +106,8 @@ exports.getDashboard = async (req, res) => {
       { $match: { isDeleted: false } },
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]),
-    // Officer's own blog stats
     Blog.aggregate([
-      { $match: { author: require('mongoose').Types.ObjectId.createFromHexString(req.user.id), isDeleted: false } },
+      { $match: { $or: [{ originalAuthor: userId }, { author: userId }], isDeleted: false } },
       { $group: { _id: '$status', count: { $sum: 1 } } },
     ]),
   ]);
