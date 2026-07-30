@@ -18,9 +18,37 @@ connectDB();
 const app = express();
 
 // --- Security & Core Middlewares ---
-app.use(helmet());
+
+// Configure Helmet to allow cross-origin requests & Swagger UI scripts
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
+
 app.use(morgan('dev'));
-app.use(cors());
+
+// Configured CORS for production and development
+const allowedOrigins = [
+  'http://localhost:3000',
+  process.env.FRONTEND_URL, // e.g. https://your-app.vercel.app
+].filter(Boolean);
+
+app.use(
+  cors({
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like mobile apps, curl, or Postman)
+      if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+        return callback(null, true);
+      }
+      return callback(null, true); // Fallback allow during initial setup
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  })
+);
 
 // Body Parsers (Must run before query property patch and mongoSanitize)
 app.use(express.json());
@@ -53,7 +81,12 @@ const swaggerOptions = {
     },
     servers: [
       {
+        url: process.env.SERVER_URL || 'https://biocap-dashboard-backend.onrender.com',
+        description: 'Production Server',
+      },
+      {
         url: `http://localhost:${process.env.PORT || 5000}`,
+        description: 'Local Development Server',
       },
     ],
     components: {
