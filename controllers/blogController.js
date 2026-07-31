@@ -103,7 +103,7 @@ exports.getPublicBlogBySlug = async (req, res) => {
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
 
   const blogObj = blog.toObject();
-  
+
   // Omit staff/editor 'author' field from public view if different from creator
   if (blogObj.author && blogObj.originalAuthor && blogObj.author.toString() !== blogObj.originalAuthor._id.toString()) {
     delete blogObj.author;
@@ -226,29 +226,52 @@ exports.createBlog = async (req, res) => {
     return res.status(400).json({ error: 'A cover image is required' });
   }
 
-  const { title, tag, excerpt, socialHandle, organizationLink, modal, blocks } = req.parsedBody;
+  // Safe fallback to req.body if req.parsedBody was not populated
+  const bodyData = req.parsedBody || req.body || {};
+  let { title, tag, excerpt, socialHandle, organizationLink, modal, blocks } = bodyData;
 
   if (!title || !tag || !excerpt) {
     return res.status(400).json({ error: 'title, tag, and excerpt are required' });
   }
 
+  // Safe parsing for stringified blocks array sent via FormData
+  if (typeof blocks === 'string') {
+    try {
+      blocks = JSON.parse(blocks);
+    } catch (e) {
+      blocks = [];
+    }
+  }
+
+  // Safe parsing for stringified modal object sent via FormData
+  if (typeof modal === 'string') {
+    try {
+      modal = JSON.parse(modal);
+    } catch (e) {
+      modal = {};
+    }
+  }
+
   const author = await User.findById(req.user.id).select('socialHandle organizationLink role');
   const slug = await generateSlug(title);
+
+  const imgPublicId = imgFile.filename || imgFile.public_id || '';
+  const docPublicId = docFile ? (docFile.filename || docFile.public_id || '') : '';
 
   const blog = await Blog.create({
     title,
     slug,
     tag,
     excerpt,
-    blocks: blocks || [],
+    blocks: Array.isArray(blocks) ? blocks : [],
     modal: modal || {},
     socialHandle: socialHandle || author?.socialHandle,
     organizationLink: organizationLink || author?.organizationLink,
     img: imgFile.path,
-    imgPublicId: imgFile.filename,
+    imgPublicId,
     ...(docFile && {
       documentUrl: docFile.path,
-      documentPublicId: docFile.filename,
+      documentPublicId: docPublicId,
       documentName: docFile.originalname,
     }),
     originalAuthor: req.user.id,
@@ -286,7 +309,16 @@ exports.updateBlog = async (req, res) => {
     });
   }
 
-  const { title, tag, excerpt, socialHandle, organizationLink, modal, blocks } = req.parsedBody;
+  const bodyData = req.parsedBody || req.body || {};
+  let { title, tag, excerpt, socialHandle, organizationLink, modal, blocks } = bodyData;
+
+  // Safe parsing for stringified JSON parameters
+  if (typeof blocks === 'string') {
+    try { blocks = JSON.parse(blocks); } catch (e) {}
+  }
+  if (typeof modal === 'string') {
+    try { modal = JSON.parse(modal); } catch (e) {}
+  }
 
   const prevTitle = blog.title;
   if (title) {
@@ -300,7 +332,7 @@ exports.updateBlog = async (req, res) => {
   if (socialHandle) blog.socialHandle = socialHandle;
   if (organizationLink) blog.organizationLink = organizationLink;
   if (modal) blog.modal = modal;
-  if (blocks) blog.blocks = blocks;
+  if (blocks) blog.blocks = Array.isArray(blocks) ? blocks : blog.blocks;
 
   // Track last editor
   blog.author = req.user.id;
@@ -312,13 +344,13 @@ exports.updateBlog = async (req, res) => {
   if (imgFile) {
     await destroyAsset(blog.imgPublicId, 'image');
     blog.img = imgFile.path;
-    blog.imgPublicId = imgFile.filename;
+    blog.imgPublicId = imgFile.filename || imgFile.public_id || '';
   }
 
   if (docFile) {
     await destroyAsset(blog.documentPublicId, 'raw');
     blog.documentUrl = docFile.path;
-    blog.documentPublicId = docFile.filename;
+    blog.documentPublicId = docFile.filename || docFile.public_id || '';
     blog.documentName = docFile.originalname;
   }
 

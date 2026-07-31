@@ -108,14 +108,29 @@ const swaggerDocs = swaggerJsdoc(swaggerOptions);
 // --- API Documentation Route ---
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 
-// --- Route Declarations ---
+// --- Route Declarations with Safety Checks ---
 app.use('/api/upload', uploadRoutes);
-app.use('/api/auth', require('./routes/auth'));
-app.use('/api/blogs', require('./routes/blog'));
-app.use('/api/admin', require('./routes/admin'));
-app.use('/api/officer', require('./routes/officer'));
-app.use('/api/editor', require('./routes/editor'));
-app.use('/api/contributor', require('./routes/creator'));
+
+const routeMap = [
+  ['/api/auth', './routes/auth'],
+  ['/api/blogs', './routes/blog'],
+  ['/api/admin', './routes/admin'],
+  ['/api/officer', './routes/officer'],
+  ['/api/editor', './routes/editor'],
+  ['/api/contributor', './routes/creator'],
+];
+
+routeMap.forEach(([endpoint, filePath]) => {
+  const routerModule = require(filePath);
+  
+  if (typeof routerModule !== 'function') {
+    console.error(`\n❌ CRITICAL ROUTE ERROR in ${filePath}:`);
+    console.error(`   The module returned "${typeof routerModule}" instead of an Express Router.`);
+    console.error(`   👉 Please check ${filePath} and verify it ends with: module.exports = router;\n`);
+  }
+
+  app.use(endpoint, routerModule);
+});
 
 // Baseline health check route
 app.get('/', (req, res) => {

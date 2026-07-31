@@ -6,12 +6,20 @@ const Blog = require('../models/Blog');
  * Automatically appends a short suffix when a slug already exists in the DB.
  *
  * @param {string} title
- * @param {string|null} excludeId  – pass the existing blog _id when updating so
- *                                   the current blog's own slug isn't flagged as a collision.
+ * @param {string|null} excludeId – pass the existing blog _id when updating so
+ *                                  the current blog's own slug isn't flagged as a collision.
  * @returns {Promise<string>}
  */
 async function generateSlug(title, excludeId = null) {
-  const base = slugifyLib(title, { lower: true, strict: true, trim: true });
+  // Guard clause: ensure title is a valid string
+  const rawTitle = typeof title === 'string' && title.trim() ? title.trim() : 'untitled-story';
+
+  let base = slugifyLib(rawTitle, { lower: true, strict: true, trim: true });
+  
+  // Fallback if slugify returned an empty string (e.g., title had only special symbols)
+  if (!base) {
+    base = 'story-' + Date.now();
+  }
 
   const query = { slug: base };
   if (excludeId) query._id = { $ne: excludeId };
