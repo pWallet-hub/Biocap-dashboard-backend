@@ -4,6 +4,7 @@ const dotenv = require('dotenv');
 const helmet = require('helmet');
 const mongoSanitize = require('express-mongo-sanitize');
 const morgan = require('morgan');
+const path = require('path');
 const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
 const connectDB = require('./config/db');
@@ -19,7 +20,6 @@ const app = express();
 
 // --- Security & Core Middlewares ---
 
-// Configure Helmet to allow cross-origin requests & Swagger UI scripts
 app.use(
   helmet({
     contentSecurityPolicy: false,
@@ -32,17 +32,16 @@ app.use(morgan('dev'));
 // Configured CORS for production and development
 const allowedOrigins = [
   'http://localhost:3000',
-  process.env.FRONTEND_URL, // e.g. https://your-app.vercel.app
+  process.env.FRONTEND_URL,
 ].filter(Boolean);
 
 app.use(
   cors({
     origin: function (origin, callback) {
-      // Allow requests with no origin (like mobile apps, curl, or Postman)
       if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
         return callback(null, true);
       }
-      return callback(null, true); // Fallback allow during initial setup
+      return callback(null, true);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -50,7 +49,7 @@ app.use(
   })
 );
 
-// Body Parsers (Must run before query property patch and mongoSanitize)
+// Body Parsers
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -70,7 +69,7 @@ app.use((req, res, next) => {
 // Sanitize inputs against MongoDB Operator Injection
 app.use(mongoSanitize());
 
-// --- Swagger Configuration Options ---
+// --- Swagger Configuration Options (FIXED) ---
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
@@ -100,7 +99,13 @@ const swaggerOptions = {
       },
     },
   },
-  apis: ['./routes/*.js'],
+  // 🚨 MULTI-PATH RESOLUTION: Guarantees scanning regardless of working execution directory or hosting environment
+  apis: [
+    path.resolve(__dirname, 'routes', '*.js'),
+    path.resolve(__dirname, 'routes', '**', '*.js'),
+    path.join(__dirname, './routes/*.js'),
+    './routes/*.js',
+  ],
 };
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
@@ -121,15 +126,19 @@ const routeMap = [
 ];
 
 routeMap.forEach(([endpoint, filePath]) => {
-  const routerModule = require(filePath);
-  
-  if (typeof routerModule !== 'function') {
-    console.error(`\n❌ CRITICAL ROUTE ERROR in ${filePath}:`);
-    console.error(`   The module returned "${typeof routerModule}" instead of an Express Router.`);
-    console.error(`   👉 Please check ${filePath} and verify it ends with: module.exports = router;\n`);
+  try {
+    const routerModule = require(filePath);
+    
+    if (typeof routerModule !== 'function') {
+      console.error(`\n❌ CRITICAL ROUTE ERROR in ${filePath}:`);
+      console.error(`   The module returned "${typeof routerModule}" instead of an Express Router.`);
+      console.error(`   👉 Please check ${filePath} and verify it ends with: module.exports = router;\n`);
+    } else {
+      app.use(endpoint, routerModule);
+    }
+  } catch (err) {
+    console.error(`⚠️ Could not load route file at ${filePath}:`, err.message);
   }
-
-  app.use(endpoint, routerModule);
 });
 
 // Baseline health check route
