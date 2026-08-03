@@ -267,6 +267,51 @@ router.patch('/blogs/:id/publish', asyncHandler(blogController.publishBlog));
  */
 router.patch('/blogs/:id/unpublish', asyncHandler(blogController.unpublishBlog));
 
+// ─── Trash & Permanent Wipe Operations ────────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/officer/trash:
+ *   get:
+ *     summary: List soft-deleted blogs for officer trash bin
+ *     tags: [Communication Officer]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.get('/trash', asyncHandler(blogController.getDeletedBlogs));
+
+/**
+ * @swagger
+ * /api/officer/trash/{id}/restore:
+ *   patch:
+ *     summary: Restore a soft-deleted blog back to queue
+ *     tags: [Communication Officer]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ */
+router.patch('/trash/:id/restore', asyncHandler(blogController.restoreBlog));
+
+/**
+ * @swagger
+ * /api/officer/trash/{id}/permanent:
+ *   delete:
+ *     summary: Permanently delete blog and remove Cloudinary media
+ *     tags: [Communication Officer]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ */
+router.delete('/trash/:id/permanent', asyncHandler(blogController.permanentDeleteBlog));
+
 // ─── User Review (external contributors only) ─────────────────────────────────
 
 /**

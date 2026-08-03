@@ -50,7 +50,7 @@ exports.getPublicBlogs = async (req, res) => {
 
   const filter = { status: 'published', isDeleted: false };
   if (req.query.tag) filter.tag = { $regex: req.query.tag.trim(), $options: 'i' };
-  if (req.query.search?.trim()) filter.$text = { $search: req.query.search.trim() };
+  if (req.query.search?.trim()) filter.$text = { $search: query.search.trim() };
 
   const [blogs, total] = await Promise.all([
     Blog.find(filter)
@@ -226,7 +226,6 @@ exports.createBlog = async (req, res) => {
     return res.status(400).json({ error: 'A cover image is required' });
   }
 
-  // Safe fallback to req.body if req.parsedBody was not populated
   const bodyData = req.parsedBody || req.body || {};
   let { title, tag, excerpt, socialHandle, organizationLink, modal, blocks } = bodyData;
 
@@ -234,7 +233,6 @@ exports.createBlog = async (req, res) => {
     return res.status(400).json({ error: 'title, tag, and excerpt are required' });
   }
 
-  // Safe parsing for stringified blocks array sent via FormData
   if (typeof blocks === 'string') {
     try {
       blocks = JSON.parse(blocks);
@@ -243,7 +241,6 @@ exports.createBlog = async (req, res) => {
     }
   }
 
-  // Safe parsing for stringified modal object sent via FormData
   if (typeof modal === 'string') {
     try {
       modal = JSON.parse(modal);
@@ -294,13 +291,16 @@ exports.createBlog = async (req, res) => {
 
 /**
  * PUT /api/blogs/:id
- * Updates blog content & blocks. originalAuthor remains unchanged; author is set to last editor.
+ * Updates blog content & cover images. Reviewers are permitted to adjust cover photos during pending_review.
  */
 exports.updateBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
 
-  if (!blog.canBeEditedBy(req.user)) {
+  const isReviewerUser = isReviewer(req.user.role);
+
+  // Allow reviewers to update images & content during review stage
+  if (!isReviewerUser && !blog.canBeEditedBy(req.user)) {
     return res.status(403).json({
       error:
         blog.status === 'published'
@@ -338,9 +338,10 @@ exports.updateBlog = async (req, res) => {
   blog.author = req.user.id;
   blog.authorRole = req.user.role;
 
-  const imgFile = req.files?.img?.[0];
+  const imgFile = req.files?.img?.[0] || req.file;
   const docFile = req.files?.document?.[0];
 
+  // Replace uncropped Cloudinary image with newly cropped image
   if (imgFile) {
     await destroyAsset(blog.imgPublicId, 'image');
     blog.img = imgFile.path;
