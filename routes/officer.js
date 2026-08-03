@@ -4,102 +4,75 @@ const userController = require('../controllers/userController');
 const officerBlogController = require('../controllers/officerBlogController');
 const blogController = require('../controllers/blogController');
 const { protect, authorize } = require('../middleware/authMiddleware');
-const upload = require('../middleware/upload');
-const { parseBlogBody } = require('../middleware/validateBlogInput');
 const asyncHandler = require('../utils/asyncHandler');
 const { ROLES } = require('../constants/roles');
 
+// Enforce authentication AND strict Communication Officer Role authorization ONLY
 router.use(protect);
-router.use(authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN));
-
-const blogUploadFields = upload.fields([
-  { name: 'img', maxCount: 1 },
-  { name: 'document', maxCount: 1 },
-]);
+router.use(authorize(ROLES.COMMUNICATION_OFFICER));
 
 /**
  * @swagger
  * tags:
  *   name: Communication Officer
- *   description: Blog review/moderation, publishing, user oversight, and blog management
+ *   description: Published article viewing, officer commenting system, editor edit review & approvals, and notifications
  */
 
-// ─── Officer Dashboard ────────────────────────────────────────────────────────
+// ─── Officer Dashboard & Stats ────────────────────────────────────────────────
 
 /**
  * @swagger
  * /api/officer/dashboard:
  *   get:
- *     summary: Officer dashboard — pending blog reviews, user review queue, blog stats
+ *     summary: Officer dashboard metrics & pending notification alerts
  *     tags: [Communication Officer]
  *     security:
  *       - bearerAuth: []
  */
 router.get('/dashboard', asyncHandler(officerBlogController.getDashboard));
 
-// ─── Blog Management (all blogs visible) ──────────────────────────────────────
-
-/**
- * @swagger
- * /api/officer/blogs:
- *   get:
- *     summary: List all blogs across all statuses with filters
- *     tags: [Communication Officer]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: status
- *         schema: { type: string, enum: [draft, pending_review, approved, published] }
- *       - in: query
- *         name: author
- *         schema: { type: string }
- *       - in: query
- *         name: search
- *         schema: { type: string }
- *       - in: query
- *         name: page
- *         schema: { type: integer }
- *       - in: query
- *         name: limit
- *         schema: { type: integer }
- */
-router.get('/blogs', asyncHandler(officerBlogController.listBlogs));
-
 /**
  * @swagger
  * /api/officer/blogs/stats:
  *   get:
- *     summary: Blog counts by status (platform-wide)
+ *     summary: Platform-wide blog counts and published statistics
  *     tags: [Communication Officer]
  *     security:
  *       - bearerAuth: []
  */
 router.get('/blogs/stats', asyncHandler(officerBlogController.getBlogStats));
 
+// ─── Published Articles & Officer Commenting System ───────────────────────────
+
 /**
  * @swagger
- * /api/officer/blogs/review-queue:
+ * /api/officer/published:
  *   get:
- *     summary: Pending review queue ordered oldest-first (FIFO)
+ *     summary: List all published articles available for reading and commenting
  *     tags: [Communication Officer]
  *     security:
  *       - bearerAuth: []
  *     parameters:
+ *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *       - in: query
+ *         name: tag
+ *         schema: { type: string }
  *       - in: query
  *         name: page
- *         schema: { type: integer }
+ *         schema: { type: integer, default: 1 }
  *       - in: query
  *         name: limit
- *         schema: { type: integer }
+ *         schema: { type: integer, default: 10 }
  */
-router.get('/blogs/review-queue', asyncHandler(officerBlogController.getReviewQueue));
+router.get('/published', asyncHandler(officerBlogController.listPublishedBlogs));
 
 /**
  * @swagger
- * /api/officer/blogs/{id}:
+ * /api/officer/published/{id}:
  *   get:
- *     summary: Full detail of any blog
+ *     summary: Fetch single published article detail
  *     tags: [Communication Officer]
  *     security:
  *       - bearerAuth: []
@@ -109,100 +82,29 @@ router.get('/blogs/review-queue', asyncHandler(officerBlogController.getReviewQu
  *         required: true
  *         schema: { type: string }
  */
-router.get('/blogs/:id', asyncHandler(officerBlogController.getBlogById));
+router.get('/published/:id', asyncHandler(officerBlogController.getPublishedBlogById));
 
 /**
  * @swagger
- * /api/officer/blogs:
+ * /api/officer/published/{id}/comments:
+ *   get:
+ *     summary: Get all comments for a specific published article
+ *     tags: [Communication Officer]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ */
+router.get('/published/:id/comments', asyncHandler(officerBlogController.getArticleComments));
+
+/**
+ * @swagger
+ * /api/officer/published/{id}/comments:
  *   post:
- *     summary: Create a new blog post as the officer (starts as draft)
- *     tags: [Communication Officer]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         multipart/form-data:
- *           schema:
- *             type: object
- *             required: [title, tag, excerpt, img]
- *             properties:
- *               title: { type: string }
- *               tag: { type: string }
- *               excerpt: { type: string }
- *               blocks: { type: string, description: "JSON-stringified blocks array" }
- *               modal: { type: string, description: "JSON-stringified modal metadata object" }
- *               img: { type: string, format: binary }
- *               document: { type: string, format: binary }
- */
-router.post('/blogs', blogUploadFields, parseBlogBody, asyncHandler(blogController.createBlog));
-
-/**
- * @swagger
- * /api/officer/blogs/{id}:
- *   put:
- *     summary: Edit a blog (officer can edit any non-published blog)
- *     tags: [Communication Officer]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string }
- *     requestBody:
- *       content:
- *         multipart/form-data:
- *           schema:
- *             type: object
- *             properties:
- *               title: { type: string }
- *               tag: { type: string }
- *               excerpt: { type: string }
- *               blocks: { type: string, description: "JSON-stringified blocks array" }
- *               modal: { type: string }
- *               img: { type: string, format: binary }
- *               document: { type: string, format: binary }
- */
-router.put('/blogs/:id', blogUploadFields, parseBlogBody, asyncHandler(blogController.updateBlog));
-
-/**
- * @swagger
- * /api/officer/blogs/{id}:
- *   delete:
- *     summary: Soft-delete a blog (officer cannot delete published blogs)
- *     tags: [Communication Officer]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string }
- */
-router.delete('/blogs/:id', asyncHandler(blogController.deleteBlog));
-
-/**
- * @swagger
- * /api/officer/blogs/{id}/submit:
- *   patch:
- *     summary: Submit the officer's own draft blog for review
- *     tags: [Communication Officer]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string }
- */
-router.patch('/blogs/:id/submit', asyncHandler(blogController.submitBlog));
-
-/**
- * @swagger
- * /api/officer/blogs/{id}/review:
- *   patch:
- *     summary: Approve or reject a pending blog — notifies author by email
+ *     summary: Add a comment to a published article (Triggers notification to team)
  *     tags: [Communication Officer]
  *     security:
  *       - bearerAuth: []
@@ -217,74 +119,35 @@ router.patch('/blogs/:id/submit', asyncHandler(blogController.submitBlog));
  *         application/json:
  *           schema:
  *             type: object
- *             required: [decision]
+ *             required: [content]
  *             properties:
- *               decision:
- *                 type: string
- *                 enum: [approved, rejected]
- *               note:
- *                 type: string
- *                 description: Required when decision is rejected
+ *               content: { type: string, description: "Officer comment text" }
  */
-router.patch('/blogs/:id/review', asyncHandler(blogController.reviewBlog));
+router.post('/published/:id/comments', asyncHandler(officerBlogController.addArticleComment));
+
+// ─── Editor Changes Approval Workflow ──────────────────────────────────────────
 
 /**
  * @swagger
- * /api/officer/blogs/{id}/publish:
- *   patch:
- *     summary: Publish an approved blog post to the live site
- *     tags: [Communication Officer]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string }
- */
-router.patch('/blogs/:id/publish', asyncHandler(blogController.publishBlog));
-
-/**
- * @swagger
- * /api/officer/blogs/{id}/unpublish:
- *   patch:
- *     summary: Remove a published blog from the live website
- *     tags: [Communication Officer]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string }
- *     requestBody:
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               note: { type: string, description: "Reason for unpublishing" }
- */
-router.patch('/blogs/:id/unpublish', asyncHandler(blogController.unpublishBlog));
-
-// ─── Trash & Permanent Wipe Operations ────────────────────────────────────────
-
-/**
- * @swagger
- * /api/officer/trash:
+ * /api/officer/blogs/{id}/editor-changes:
  *   get:
- *     summary: List soft-deleted blogs for officer trash bin
+ *     summary: Review modifications made by the Editor on an article
  *     tags: [Communication Officer]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
  */
-router.get('/trash', asyncHandler(blogController.getDeletedBlogs));
+router.get('/blogs/:id/editor-changes', asyncHandler(officerBlogController.getEditorChanges));
 
 /**
  * @swagger
- * /api/officer/trash/{id}/restore:
+ * /api/officer/blogs/{id}/accept-editor-changes:
  *   patch:
- *     summary: Restore a soft-deleted blog back to queue
+ *     summary: Accept and finalize changes submitted by the Editor for an article
  *     tags: [Communication Officer]
  *     security:
  *       - bearerAuth: []
@@ -293,14 +156,34 @@ router.get('/trash', asyncHandler(blogController.getDeletedBlogs));
  *         name: id
  *         required: true
  *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               approvalNote: { type: string, description: "Optional note upon accepting changes" }
  */
-router.patch('/trash/:id/restore', asyncHandler(blogController.restoreBlog));
+router.patch('/blogs/:id/accept-editor-changes', asyncHandler(officerBlogController.acceptEditorChanges));
+
+// ─── Notifications & Alerts ────────────────────────────────────────────────────
 
 /**
  * @swagger
- * /api/officer/trash/{id}/permanent:
- *   delete:
- *     summary: Permanently delete blog and remove Cloudinary media
+ * /api/officer/notifications:
+ *   get:
+ *     summary: Fetch officer notifications (e.g., new article comments & editor update prompts)
+ *     tags: [Communication Officer]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.get('/notifications', asyncHandler(officerBlogController.getOfficerNotifications));
+
+/**
+ * @swagger
+ * /api/officer/notifications/{id}/read:
+ *   patch:
+ *     summary: Mark a notification alert as read
  *     tags: [Communication Officer]
  *     security:
  *       - bearerAuth: []
@@ -310,31 +193,18 @@ router.patch('/trash/:id/restore', asyncHandler(blogController.restoreBlog));
  *         required: true
  *         schema: { type: string }
  */
-router.delete('/trash/:id/permanent', asyncHandler(blogController.permanentDeleteBlog));
+router.patch('/notifications/:id/read', asyncHandler(officerBlogController.markNotificationRead));
 
-// ─── User Review (external contributors only) ─────────────────────────────────
+// ─── User Review (External Contributors Oversight) ───────────────────────────
 
 /**
  * @swagger
  * /api/officer/users:
  *   get:
- *     summary: List external contributor accounts for review
+ *     summary: List external contributor profiles for oversight
  *     tags: [Communication Officer]
  *     security:
  *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: page
- *         schema: { type: integer }
- *       - in: query
- *         name: limit
- *         schema: { type: integer }
- *       - in: query
- *         name: search
- *         schema: { type: string }
- *       - in: query
- *         name: profileReviewStatus
- *         schema: { type: string, enum: [pending, verified, needs_attention] }
  */
 router.get('/users', asyncHandler(userController.listUsers));
 
@@ -342,7 +212,7 @@ router.get('/users', asyncHandler(userController.listUsers));
  * @swagger
  * /api/officer/users/review-queue:
  *   get:
- *     summary: Users awaiting profile review
+ *     summary: View external contributors awaiting profile verification
  *     tags: [Communication Officer]
  *     security:
  *       - bearerAuth: []
@@ -353,7 +223,7 @@ router.get('/users/review-queue', asyncHandler(userController.getUserReviewQueue
  * @swagger
  * /api/officer/users/{id}:
  *   get:
- *     summary: View a contributor profile with full blog activity
+ *     summary: View external contributor profile detail
  *     tags: [Communication Officer]
  *     security:
  *       - bearerAuth: []
@@ -369,7 +239,7 @@ router.get('/users/:id', asyncHandler(userController.getUserById));
  * @swagger
  * /api/officer/users/{id}/review:
  *   patch:
- *     summary: Review a contributor profile (verify, flag, or add note)
+ *     summary: Review contributor profile (verify or request attention)
  *     tags: [Communication Officer]
  *     security:
  *       - bearerAuth: []
@@ -378,20 +248,6 @@ router.get('/users/:id', asyncHandler(userController.getUserById));
  *         name: id
  *         required: true
  *         schema: { type: string }
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [decision]
- *             properties:
- *               decision:
- *                 type: string
- *                 enum: [verified, needs_attention, noted]
- *               note:
- *                 type: string
- *                 description: Required when decision is needs_attention
  */
 router.patch('/users/:id/review', asyncHandler(userController.reviewUser));
 

@@ -49,6 +49,10 @@ const UserSchema = new mongoose.Schema(
     // Admin can deactivate an account without deleting it
     isActive: { type: Boolean, default: true },
 
+    // ─── Notification Subscriptions ─────────────────────────────────────────
+    // Controls if the user receives alerts for comments & editor updates
+    receiveNotifications: { type: Boolean, default: true },
+
     // Profile review workflow — communication officers / admins verify external contributors
     profileReviewStatus: {
       type: String,

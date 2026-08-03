@@ -1,5 +1,6 @@
 const Blog = require('../models/Blog');
 const User = require('../models/User');
+const Notification = require('../models/Notification');
 const cloudinary = require('../config/cloudinary');
 const { REVIEWERS, CREATORS, isReviewer, ROLES } = require('../constants/roles');
 const { parsePagination, paginatedResponse } = require('../utils/pagination');
@@ -11,7 +12,7 @@ const {
   sendBlogPublishedEmail,
 } = require('../utils/sendEmail');
 
-// ─── Private helpers ──────────────────────────────────────────────────────────
+// ─── Private Helpers ──────────────────────────────────────────────────────────
 
 const destroyAsset = async (publicId, resourceType = 'image') => {
   if (!publicId) return;
@@ -38,12 +39,11 @@ const buildBlogFilter = (query, user) => {
   return filter;
 };
 
-// ─── Public endpoints (no auth) ───────────────────────────────────────────────
+// ─── Public Endpoints (No Auth) ───────────────────────────────────────────────
 
 /**
  * GET /api/blogs/public
- * Paginated list of all published blogs for the public website.
- * Uses originalAuthor for the displayed byline.
+ * Paginated list of published blogs for the public website.
  */
 exports.getPublicBlogs = async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
@@ -91,7 +91,6 @@ exports.getPublicBlogs = async (req, res) => {
 /**
  * GET /api/blogs/public/:slug
  * Single published blog by URL slug — increments view counter.
- * Returns populated originalAuthor and omits author if different.
  */
 exports.getPublicBlogBySlug = async (req, res) => {
   const blog = await Blog.findOneAndUpdate(
@@ -104,7 +103,6 @@ exports.getPublicBlogBySlug = async (req, res) => {
 
   const blogObj = blog.toObject();
 
-  // Omit staff/editor 'author' field from public view if different from creator
   if (blogObj.author && blogObj.originalAuthor && blogObj.author.toString() !== blogObj.originalAuthor._id.toString()) {
     delete blogObj.author;
   }
@@ -112,11 +110,11 @@ exports.getPublicBlogBySlug = async (req, res) => {
   res.json(blogObj);
 };
 
-// ─── Authenticated list / detail ──────────────────────────────────────────────
+// ─── Authenticated List / Detail ──────────────────────────────────────────────
 
 /**
  * GET /api/blogs
- * Reviewers see all blogs; other roles see only their own.
+ * Reviewers see all blogs; creators see only their own.
  */
 exports.getBlogs = async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
@@ -139,7 +137,7 @@ exports.getBlogs = async (req, res) => {
 
 /**
  * GET /api/blogs/my-submissions
- * Status tracker for external contributors.
+ * Status tracker for content creators.
  */
 exports.getMySubmissions = async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
@@ -163,7 +161,7 @@ exports.getMySubmissions = async (req, res) => {
 
 /**
  * GET /api/blogs/:id
- * Full blog detail.
+ * Full blog detail for permitted roles.
  */
 exports.getBlogById = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false })
@@ -185,7 +183,7 @@ exports.getBlogById = async (req, res) => {
   res.json(blog);
 };
 
-// ─── Blog stats ───────────────────────────────────────────────────────────────
+// ─── Blog Statistics ──────────────────────────────────────────────────────────
 
 exports.getBlogStats = async (req, res) => {
   const baseFilter = isReviewer(req.user.role)
@@ -212,11 +210,11 @@ exports.getBlogStats = async (req, res) => {
   });
 };
 
-// ─── CRUD ─────────────────────────────────────────────────────────────────────
+// ─── CRUD Operations ──────────────────────────────────────────────────────────
 
 /**
  * POST /api/blogs
- * Create a new blog with blocks[] array & frozen originalAuthor fields.
+ * Create a new draft blog article.
  */
 exports.createBlog = async (req, res) => {
   const imgFile = req.files?.img?.[0];
@@ -234,19 +232,11 @@ exports.createBlog = async (req, res) => {
   }
 
   if (typeof blocks === 'string') {
-    try {
-      blocks = JSON.parse(blocks);
-    } catch (e) {
-      blocks = [];
-    }
+    try { blocks = JSON.parse(blocks); } catch (e) { blocks = []; }
   }
 
   if (typeof modal === 'string') {
-    try {
-      modal = JSON.parse(modal);
-    } catch (e) {
-      modal = {};
-    }
+    try { modal = JSON.parse(modal); } catch (e) { modal = {}; }
   }
 
   const author = await User.findById(req.user.id).select('socialHandle organizationLink role');
@@ -291,7 +281,7 @@ exports.createBlog = async (req, res) => {
 
 /**
  * PUT /api/blogs/:id
- * Updates blog content & cover images. Reviewers are permitted to adjust cover photos during pending_review.
+ * Updates blog content. 
  */
 exports.updateBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
@@ -299,7 +289,6 @@ exports.updateBlog = async (req, res) => {
 
   const isReviewerUser = isReviewer(req.user.role);
 
-  // Allow reviewers to update images & content during review stage
   if (!isReviewerUser && !blog.canBeEditedBy(req.user)) {
     return res.status(403).json({
       error:
@@ -312,7 +301,6 @@ exports.updateBlog = async (req, res) => {
   const bodyData = req.parsedBody || req.body || {};
   let { title, tag, excerpt, socialHandle, organizationLink, modal, blocks } = bodyData;
 
-  // Safe parsing for stringified JSON parameters
   if (typeof blocks === 'string') {
     try { blocks = JSON.parse(blocks); } catch (e) {}
   }
@@ -334,14 +322,12 @@ exports.updateBlog = async (req, res) => {
   if (modal) blog.modal = modal;
   if (blocks) blog.blocks = Array.isArray(blocks) ? blocks : blog.blocks;
 
-  // Track last editor
   blog.author = req.user.id;
   blog.authorRole = req.user.role;
 
   const imgFile = req.files?.img?.[0] || req.file;
   const docFile = req.files?.document?.[0];
 
-  // Replace uncropped Cloudinary image with newly cropped image
   if (imgFile) {
     await destroyAsset(blog.imgPublicId, 'image');
     blog.img = imgFile.path;
@@ -458,7 +444,7 @@ exports.getDeletedBlogs = async (req, res) => {
   res.json(paginatedResponse(blogs, total, { page, limit }));
 };
 
-// ─── Workflow actions ──────────────────────────────────────────────────────────
+// ─── Workflow Actions ──────────────────────────────────────────────────────────
 
 exports.submitBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
@@ -525,6 +511,19 @@ exports.reviewBlog = async (req, res) => {
   }
 
   await blog.save();
+
+  // Notify Officers when a blog is approved and ready for publishing
+  if (decision === 'approved' && Notification) {
+    const officers = await User.find({ role: ROLES.COMMUNICATION_OFFICER, isActive: true }).select('_id');
+    const alerts = officers.map((off) => ({
+      recipient: off._id,
+      sender: req.user.id,
+      type: 'BLOG_APPROVED',
+      message: `Article "${blog.title}" has been approved and is ready to be published live.`,
+      article: blog._id,
+    }));
+    if (alerts.length > 0) await Notification.insertMany(alerts);
+  }
 
   if (blog.originalAuthor?.email) {
     if (decision === 'approved') {

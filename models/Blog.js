@@ -35,6 +35,28 @@ const ReviewLogSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// ─── Comment Schema for Published Articles ──────────────────────────────────
+const CommentSchema = new mongoose.Schema(
+  {
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    content: { type: String, required: true, trim: true },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { timestamps: true }
+);
+
+// ─── Editor Modifications Schema ─────────────────────────────────────────────
+const EditorModificationSchema = new mongoose.Schema(
+  {
+    editor: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    title: { type: String, trim: true },
+    excerpt: { type: String, trim: true },
+    blocks: { type: [BlockSchema] },
+    modifiedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const BlogSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true },
@@ -81,6 +103,14 @@ const BlogSchema = new mongoose.Schema(
 
     publishedAt: { type: Date },
     publishedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+
+    // ─── Officer Review & Editor Change Tracking ──────────────────────────────
+    editorModifications: { type: EditorModificationSchema },
+    officerAcceptedChanges: { type: Boolean, default: false },
+    officerApprovalNote: { type: String, trim: true },
+
+    // ─── Comments on Published Articles ──────────────────────────────────────
+    comments: { type: [CommentSchema], default: [] },
 
     // Soft delete — admin can restore or permanently remove
     isDeleted: { type: Boolean, default: false },
