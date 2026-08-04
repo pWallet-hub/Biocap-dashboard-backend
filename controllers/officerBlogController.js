@@ -1,14 +1,14 @@
 const Blog = require('../models/Blog');
 const User = require('../models/User');
-const Notification = require('../models/Notification'); // Ensure Notification model exists
+const Notification = require('../models/Notification');
 const { parsePagination, paginatedResponse } = require('../utils/pagination');
 const { writeAuditLog } = require('../utils/auditLogger');
-const { ROLES, EXTERNAL_CREATORS } = require('../constants/roles');
+const { ROLES } = require('../constants/roles');
 const mongoose = require('mongoose');
 
 /**
- * GET /api/officer/dashboard
- * Dashboard metrics for Communication Officers
+ * GET /api/officer/dashboard or /api/editor/blogs/stats
+ * Dashboard metrics for Communication Officers and Editors
  */
 exports.getDashboard = async (req, res) => {
   const userId = mongoose.Types.ObjectId.createFromHexString(req.user.id);
@@ -38,7 +38,7 @@ exports.getDashboard = async (req, res) => {
 };
 
 /**
- * GET /api/officer/blogs/stats
+ * GET /api/officer/blogs/stats or /api/editor/blogs/stats
  * Published and platform-wide metrics
  */
 exports.getBlogStats = async (req, res) => {
@@ -56,6 +56,73 @@ exports.getBlogStats = async (req, res) => {
     published: byStatus.published || 0,
     total: Object.values(byStatus).reduce((a, b) => a + b, 0),
   });
+};
+
+/**
+ * GET /api/editor/blogs or /api/officer/blogs
+ * List all blogs with status, search, or tag filtering
+ */
+exports.listBlogs = async (req, res) => {
+  const { page, limit, skip } = parsePagination(req.query);
+  const filter = { isDeleted: false };
+
+  if (req.query.status) filter.status = req.query.status;
+  if (req.query.tag) filter.tag = req.query.tag;
+  if (req.query.search?.trim()) {
+    filter.$or = [
+      { title: { $regex: req.query.search.trim(), $options: 'i' } },
+      { excerpt: { $regex: req.query.search.trim(), $options: 'i' } },
+    ];
+  }
+
+  const [blogs, total] = await Promise.all([
+    Blog.find(filter)
+      .sort({ updatedAt: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate('originalAuthor', 'username email role firstName lastName')
+      .populate('author', 'username email role firstName lastName')
+      .populate('publishedBy', 'username firstName lastName'),
+    Blog.countDocuments(filter),
+  ]);
+
+  res.json(paginatedResponse(blogs, total, { page, limit }));
+};
+
+/**
+ * GET /api/editor/blogs/review-queue
+ * Queue of articles pending review ordered oldest-first (FIFO)
+ */
+exports.getReviewQueue = async (req, res) => {
+  const { page, limit, skip } = parsePagination(req.query);
+  const filter = { status: 'pending_review', isDeleted: false };
+
+  const [blogs, total] = await Promise.all([
+    Blog.find(filter)
+      .sort({ createdAt: 1 })
+      .skip(skip)
+      .limit(limit)
+      .populate('originalAuthor', 'username email role firstName lastName')
+      .populate('author', 'username email role firstName lastName'),
+    Blog.countDocuments(filter),
+  ]);
+
+  res.json(paginatedResponse(blogs, total, { page, limit }));
+};
+
+/**
+ * GET /api/editor/blogs/:id or /api/officer/blogs/:id
+ * Single article detail by ID
+ */
+exports.getBlogById = async (req, res) => {
+  const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false })
+    .populate('originalAuthor', 'username email role firstName lastName socialHandle organizationLink')
+    .populate('author', 'username email role firstName lastName socialHandle organizationLink')
+    .populate('publishedBy', 'username firstName lastName')
+    .populate('comments.user', 'username firstName lastName role');
+
+  if (!blog) return res.status(404).json({ error: 'Article not found' });
+  res.json(blog);
 };
 
 /**
@@ -103,11 +170,11 @@ exports.getPublishedBlogById = async (req, res) => {
  * Fetch comments on a published article
  */
 exports.getArticleComments = async (req, res) => {
-  const blog = await Blog.findOne({ _id: req.params.id, status: 'published', isDeleted: false })
+  const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false })
     .select('comments title')
     .populate('comments.user', 'username firstName lastName role');
 
-  if (!blog) return res.status(404).json({ error: 'Published article not found' });
+  if (!blog) return res.status(404).json({ error: 'Article not found' });
   res.json(blog.comments || []);
 };
 
@@ -121,8 +188,8 @@ exports.addArticleComment = async (req, res) => {
     return res.status(400).json({ error: 'Comment content is required' });
   }
 
-  const blog = await Blog.findOne({ _id: req.params.id, status: 'published', isDeleted: false });
-  if (!blog) return res.status(404).json({ error: 'Published article not found' });
+  const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
+  if (!blog) return res.status(404).json({ error: 'Article not found' });
 
   const newComment = {
     user: req.user.id,
@@ -134,7 +201,7 @@ exports.addArticleComment = async (req, res) => {
   blog.comments.push(newComment);
   await blog.save();
 
-  // Notify Editors and Admins about the comment on the published article
+  // Notify Editors, Admins, and Officers
   if (Notification) {
     const reviewers = await User.find({
       role: { $in: [ROLES.EDITOR, ROLES.ADMIN, ROLES.COMMUNICATION_OFFICER] },
@@ -146,7 +213,7 @@ exports.addArticleComment = async (req, res) => {
       recipient: rev._id,
       sender: req.user.id,
       type: 'ARTICLE_COMMENT',
-      message: `Communication Officer commented on published story: "${blog.title}"`,
+      message: `${req.user.role === 'communication_officer' ? 'Communication Officer' : 'Team Member'} commented on story: "${blog.title}"`,
       article: blog._id,
     }));
 
@@ -180,7 +247,7 @@ exports.getEditorChanges = async (req, res) => {
 
 /**
  * PATCH /api/officer/blogs/:id/accept-editor-changes
- * Accept changes made by the Editor
+ * Accept changes made by the Editor and apply them to the article
  */
 exports.acceptEditorChanges = async (req, res) => {
   const { approvalNote } = req.body;
@@ -193,12 +260,21 @@ exports.acceptEditorChanges = async (req, res) => {
     if (blog.editorModifications.title) blog.title = blog.editorModifications.title;
     if (blog.editorModifications.excerpt) blog.excerpt = blog.editorModifications.excerpt;
     if (blog.editorModifications.blocks) blog.blocks = blog.editorModifications.blocks;
+    if (blog.editorModifications.img) blog.img = blog.editorModifications.img;
     blog.editorModifications = undefined;
   }
 
   blog.officerAcceptedChanges = true;
   blog.officerApprovalNote = approvalNote || undefined;
   await blog.save();
+
+  // Mark related EDITOR_EDIT_PROMPT notifications as read for this officer
+  if (Notification) {
+    await Notification.updateMany(
+      { recipient: req.user.id, article: blog._id, type: 'EDITOR_EDIT_PROMPT' },
+      { $set: { isRead: true } }
+    );
+  }
 
   await writeAuditLog({
     user: req.user.id,

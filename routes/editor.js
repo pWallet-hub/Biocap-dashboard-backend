@@ -31,7 +31,7 @@ const blogUploadFields = upload.fields([
  * /api/editor/blogs/stats:
  *   get:
  *     summary: Get blog counts across all statuses
- *     tags: [Editor Desk]
+ *     tags: [Communication Editor]
  *     security:
  *       - bearerAuth: []
  *     responses:
@@ -45,7 +45,7 @@ router.get('/blogs/stats', asyncHandler(officerBlogController.getBlogStats));
  * /api/editor/blogs/review-queue:
  *   get:
  *     summary: Get articles pending review ordered oldest-first (FIFO)
- *     tags: [Editor Desk]
+ *     tags: [Communication Editor]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -68,7 +68,7 @@ router.get('/blogs/review-queue', asyncHandler(officerBlogController.getReviewQu
  * /api/editor/blogs:
  *   get:
  *     summary: List all blogs with status, author, or search filtering
- *     tags: [Editor Desk]
+ *     tags: [Communication Editor]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -95,7 +95,7 @@ router.get('/blogs', asyncHandler(officerBlogController.listBlogs));
  * /api/editor/blogs/{id}:
  *   get:
  *     summary: Get full detail of an article by ID
- *     tags: [Editor Desk]
+ *     tags: [Communication Editor]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -116,7 +116,7 @@ router.get('/blogs/:id', asyncHandler(officerBlogController.getBlogById));
  * /api/editor/blogs:
  *   post:
  *     summary: Create a new blog post as an Editor
- *     tags: [Editor Desk]
+ *     tags: [Communication Editor]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -145,7 +145,7 @@ router.post('/blogs', blogUploadFields, parseBlogBody, asyncHandler(blogControll
  * /api/editor/blogs/{id}:
  *   put:
  *     summary: Edit an article (Saves proposed changes & alerts Communication Officers to accept)
- *     tags: [Editor Desk]
+ *     tags: [Communication Editor]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -176,7 +176,7 @@ router.put('/blogs/:id', blogUploadFields, parseBlogBody, asyncHandler(editorBlo
  * /api/editor/blogs/{id}/submit:
  *   patch:
  *     summary: Submit an editor draft for formal review
- *     tags: [Editor Desk]
+ *     tags: [Communication Editor]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -195,7 +195,7 @@ router.patch('/blogs/:id/submit', asyncHandler(blogController.submitBlog));
  * /api/editor/blogs/{id}/review:
  *   patch:
  *     summary: Approve or reject a submitted draft with feedback notes
- *     tags: [Editor Desk]
+ *     tags: [Communication Editor]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -228,7 +228,7 @@ router.patch('/blogs/:id/review', asyncHandler(blogController.reviewBlog));
  * /api/editor/blogs/{id}/unpublish:
  *   patch:
  *     summary: Return a published article back to approved status for revision
- *     tags: [Editor Desk]
+ *     tags: [Communication Editor]
  *     security:
  *       - bearerAuth: []
  *     parameters:

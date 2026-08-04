@@ -17,20 +17,43 @@ exports.updateBlogByEditor = async (req, res) => {
     return res.status(404).json({ error: 'Article not found' });
   }
 
+  // Safely parse blocks if sent as stringified JSON from FormData
+  let parsedBlocks = blog.blocks;
+  if (blocks) {
+    if (typeof blocks === 'string') {
+      try {
+        parsedBlocks = JSON.parse(blocks);
+      } catch (err) {
+        return res.status(400).json({ error: 'Invalid JSON format for blocks payload.' });
+      }
+    } else if (Array.isArray(blocks)) {
+      parsedBlocks = blocks;
+    }
+  }
+
+  // Handle uploaded cover image file if present in multipart request
+  let updatedImg = blog.img;
+  if (req.files && req.files.img && req.files.img[0]) {
+    updatedImg = req.files.img[0].path || req.files.img[0].secure_url || req.files.img[0].location;
+  }
+
   // 1. Record proposed editor modifications
   blog.editorModifications = {
     editor: req.user.id,
     title: title?.trim() || blog.title,
     excerpt: excerpt?.trim() || blog.excerpt,
-    blocks: blocks ? (typeof blocks === 'string' ? JSON.parse(blocks) : blocks) : blog.blocks,
+    blocks: parsedBlocks,
+    img: updatedImg,
     modifiedAt: new Date(),
   };
 
   // Flag that changes require Communication Officer acceptance
   blog.officerAcceptedChanges = false;
 
-  // Update minor fields if provided directly
-  if (tag) blog.tag = tag.trim();
+  // Update minor fields directly if provided
+  if (tag) {
+    blog.tag = tag.trim();
+  }
 
   await blog.save();
 
