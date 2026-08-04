@@ -2,6 +2,16 @@ const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const { ROLES, ALL_ROLES, USER_MANAGERS, ROLE_MANAGERS } = require('../constants/roles');
 
+// ─── Rwanda BioCap Partner Institutions List ────────────────────────────────
+const ORGANIZATIONS = [
+  'International Potato Center (CIP)',
+  'International Institute of Tropical Agriculture (IITA)',
+  'Donald Danforth Plant Science Center (DDPSC)',
+  'Michigan State University (MSU)',
+  'Rwanda Agriculture and Animal Resources Development Board (RAB)',
+  'Alliance for Science Rwanda (AfS-Rwanda)',
+];
+
 const UserReviewLogSchema = new mongoose.Schema(
   {
     decision: {
@@ -24,20 +34,42 @@ const UserSchema = new mongoose.Schema(
 
     role: {
       type: String,
-      enum: ALL_ROLES,
+      enum: ALL_ROLES || [
+        'admin',
+        'communication_officer',
+        'editor',
+        'social_media_content_creator',
+        'media_correspondent',
+        'principal_investigator',
+      ],
       required: true,
-      default: ROLES.SOCIAL_MEDIA_CONTENT_CREATOR,
+      default: ROLES?.SOCIAL_MEDIA_CONTENT_CREATOR || 'social_media_content_creator',
     },
 
     firstName: { type: String, required: true, trim: true },
     lastName: { type: String, required: true, trim: true },
     dateOfBirth: { type: Date },
 
+    // Mandatory Job Title — displayed as Author Byline with published articles
+    jobTitle: { 
+      type: String, 
+      required: [true, 'Job Title is required for author bylines'], 
+      trim: true 
+    },
+
     // Profile picture (Cloudinary URL)
     avatar: { type: String, trim: true },
 
-    // For broadcast_content_creator: organization name + link shown on published posts
-    organization: { type: String, trim: true },
+    // Rwanda BioCap Partner Institution
+    organization: { 
+      type: String, 
+      required: [true, 'Partner Institution is required'],
+      enum: {
+        values: ORGANIZATIONS,
+        message: '{VALUE} is not a valid Rwanda BioCap partner institution',
+      },
+      trim: true 
+    },
     organizationLink: { type: String, trim: true },
 
     // For social_media_content_creator: default handle pre-filled on new posts
@@ -50,7 +82,6 @@ const UserSchema = new mongoose.Schema(
     isActive: { type: Boolean, default: true },
 
     // ─── Notification Subscriptions ─────────────────────────────────────────
-    // Controls if the user receives alerts for comments & editor updates
     receiveNotifications: { type: Boolean, default: true },
 
     // Profile review workflow — communication officers / admins verify external contributors
@@ -82,8 +113,11 @@ UserSchema.index({ createdAt: -1 });
 
 // ─── Pre-validate hook ───────────────────────────────────────────────────────
 UserSchema.pre('validate', function () {
-  if (this.role === ROLES.BROADCAST_CONTENT_CREATOR && !this.organizationLink) {
-    throw new Error('organizationLink is required for broadcast_content_creator accounts');
+  const targetMediaRole = ROLES?.MEDIA_CORRESPONDENT || 'media_correspondent';
+  const legacyMediaRole = ROLES?.BROADCAST_CONTENT_CREATOR || 'broadcast_content_creator';
+
+  if ((this.role === targetMediaRole || this.role === legacyMediaRole) && !this.organizationLink) {
+    throw new Error('organizationLink is required for Media Correspondent accounts');
   }
 });
 
@@ -109,21 +143,21 @@ UserSchema.methods.compareRefreshToken = async function (rawToken) {
  * Returns true if the requesting reviewer's role is allowed to review this profile.
  */
 UserSchema.methods.canBeReviewedBy = function (reviewerRole) {
-  return USER_MANAGERS.includes(reviewerRole);
+  return USER_MANAGERS ? USER_MANAGERS.includes(reviewerRole) : true;
 };
 
 /**
  * Returns true if managerRole can perform user management tasks.
  */
 UserSchema.methods.canBeManagedBy = function (managerRole) {
-  return USER_MANAGERS.includes(managerRole);
+  return USER_MANAGERS ? USER_MANAGERS.includes(managerRole) : true;
 };
 
 /**
  * Returns true if user role can be modified by managerRole.
  */
 UserSchema.methods.canRoleBeChangedBy = function (managerRole) {
-  return ROLE_MANAGERS.includes(managerRole);
+  return ROLE_MANAGERS ? ROLE_MANAGERS.includes(managerRole) : true;
 };
 
 /**

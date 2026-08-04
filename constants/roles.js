@@ -2,11 +2,31 @@ const ROLES = {
   ADMIN: 'admin',
   COMMUNICATION_OFFICER: 'communication_officer',
   EDITOR: 'editor',
-  BROADCAST_CONTENT_CREATOR: 'broadcast_content_creator',
   SOCIAL_MEDIA_CONTENT_CREATOR: 'social_media_content_creator',
+  MEDIA_CORRESPONDENT: 'media_correspondent',
+  PRINCIPAL_INVESTIGATOR: 'principal_investigator',
+  // Preserved alias so existing database queries don't break
+  BROADCAST_CONTENT_CREATOR: 'media_correspondent',
 };
 
-const ALL_ROLES = Object.values(ROLES);
+const ALL_ROLES = [
+  ROLES.ADMIN,
+  ROLES.COMMUNICATION_OFFICER,
+  ROLES.EDITOR,
+  ROLES.SOCIAL_MEDIA_CONTENT_CREATOR,
+  ROLES.MEDIA_CORRESPONDENT,
+  ROLES.PRINCIPAL_INVESTIGATOR,
+];
+
+/** Official Rwanda BioCap Partner Institutions */
+const ORGANIZATIONS = [
+  'International Potato Center (CIP)',
+  'International Institute of Tropical Agriculture (IITA)',
+  'Donald Danforth Plant Science Center (DDPSC)',
+  'Michigan State University (MSU)',
+  'Rwanda Agriculture and Animal Resources Development Board (RAB)',
+  'Alliance for Science Rwanda (AfS-Rwanda)',
+];
 
 /** Roles that can approve/reject blogs */
 const REVIEWERS = [ROLES.ADMIN, ROLES.COMMUNICATION_OFFICER, ROLES.EDITOR];
@@ -25,8 +45,9 @@ const CREATORS = ALL_ROLES;
 
 /** External content creators */
 const EXTERNAL_CREATORS = [
-  ROLES.BROADCAST_CONTENT_CREATOR,
+  ROLES.MEDIA_CORRESPONDENT,
   ROLES.SOCIAL_MEDIA_CONTENT_CREATOR,
+  ROLES.PRINCIPAL_INVESTIGATOR,
 ];
 
 const isReviewer = (role) => REVIEWERS.includes(role);
@@ -41,6 +62,7 @@ const isEditor = (role) => role === ROLES.EDITOR;
 module.exports = {
   ROLES,
   ALL_ROLES,
+  ORGANIZATIONS,
   REVIEWERS,
   PUBLISHERS,
   USER_MANAGERS,

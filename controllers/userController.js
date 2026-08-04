@@ -1,12 +1,15 @@
 const User = require('../models/User');
 const Blog = require('../models/Blog');
 const { parsePagination, paginatedResponse } = require('../utils/pagination');
-const { EXTERNAL_CREATORS, REVIEWERS } = require('../constants/roles');
+const { EXTERNAL_CREATORS, REVIEWERS, ROLES, ORGANIZATIONS } = require('../constants/roles');
 const { validateUserReview } = require('../middleware/validateUserInput');
 
 const USER_LIST_SELECT = '-password';
 const USER_DETAIL_POPULATE = { path: 'createdBy', select: 'username firstName lastName' };
 
+/**
+ * Helper: Build filter query for user listing based on requester role
+ */
 const buildUserListFilter = (query, requesterRole) => {
   const filter = {};
 
@@ -32,6 +35,9 @@ const buildUserListFilter = (query, requesterRole) => {
   return filter;
 };
 
+/**
+ * Helper: Attach aggregated blog stats to user objects
+ */
 const attachBlogStats = async (users) => {
   const ids = users.map((u) => u._id);
   const stats = await Blog.aggregate([
@@ -63,6 +69,112 @@ const attachBlogStats = async (users) => {
   });
 };
 
+/**
+ * POST /api/auth/register or /api/users/register
+ * Register a new user with dynamic institution & role rules + mandatory jobTitle
+ */
+exports.register = async (req, res) => {
+  try {
+    const {
+      username,
+      email,
+      password,
+      firstName,
+      lastName,
+      dateOfBirth,
+      organization,
+      jobTitle,
+      organizationLink,
+      socialHandle,
+      role,
+    } = req.body;
+
+    // 1. Mandatory Fields Validation
+    if (!username || !email || !password || !firstName || !lastName || !organization || !jobTitle || !role) {
+      return res.status(400).json({
+        error: 'Please fill out all required fields, including Organization and Job Title.',
+      });
+    }
+
+    // 2. Validate Institution
+    if (!ORGANIZATIONS.includes(organization)) {
+      return res.status(400).json({
+        error: 'Selected institution is not a valid Rwanda BioCap partner institution.',
+      });
+    }
+
+    // 3. Dynamic Institution-Role Validation Rules
+    const isAfSRwanda = organization === 'Alliance for Science Rwanda (AfS-Rwanda)';
+    const afsRoles = [
+      ROLES.SOCIAL_MEDIA_CONTENT_CREATOR,
+      ROLES.MEDIA_CORRESPONDENT,
+      ROLES.COMMUNICATION_OFFICER,
+    ];
+    const partnerRoles = [
+      ROLES.PRINCIPAL_INVESTIGATOR,
+      ROLES.COMMUNICATION_OFFICER,
+    ];
+
+    if (isAfSRwanda && !afsRoles.includes(role)) {
+      return res.status(400).json({
+        error: 'Alliance for Science Rwanda accounts must select Social Media Content Creator, Media Correspondent, or Communication Officer.',
+      });
+    }
+
+    if (!isAfSRwanda && !partnerRoles.includes(role)) {
+      return res.status(400).json({
+        error: 'Partner institution accounts must select Principal Investigator (PI) or Communication Officer.',
+      });
+    }
+
+    // 4. Media Correspondent specific check
+    const isMediaCorrespondent = role === ROLES.MEDIA_CORRESPONDENT || role === 'media_correspondent';
+    if (isMediaCorrespondent && !organizationLink) {
+      return res.status(400).json({
+        error: 'An organization link is required for Media Correspondent accounts.',
+      });
+    }
+
+    // 5. Check duplicate username or email
+    const existingUser = await User.findOne({
+      $or: [{ username: username.trim() }, { email: email.toLowerCase().trim() }],
+    });
+    if (existingUser) {
+      return res.status(400).json({ error: 'Username or Email is already registered.' });
+    }
+
+    // 6. Instantiate & Save User
+    const user = new User({
+      username: username.trim(),
+      email: email.toLowerCase().trim(),
+      password, // Password hashing handled in User model pre-save hook or bcrypt
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
+      dateOfBirth: dateOfBirth || undefined,
+      organization,
+      jobTitle: jobTitle.trim(),
+      organizationLink: organizationLink ? organizationLink.trim() : undefined,
+      socialHandle: socialHandle ? socialHandle.trim() : undefined,
+      role,
+    });
+
+    await user.save();
+
+    const { password: _, ...safeUser } = user.toObject();
+
+    res.status(201).json({
+      message: 'Registration successful! Your account is now active.',
+      user: safeUser,
+    });
+  } catch (err) {
+    console.error('Registration Error:', err);
+    res.status(500).json({ error: err.message || 'Server error during registration.' });
+  }
+};
+
+/**
+ * GET /api/users — List user accounts with pagination and filters
+ */
 exports.listUsers = async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
   const filter = buildUserListFilter(req.query, req.user.role);
@@ -76,6 +188,9 @@ exports.listUsers = async (req, res) => {
   res.json(paginatedResponse(enriched, total, { page, limit }));
 };
 
+/**
+ * GET /api/users/:id — Get details of a single user
+ */
 exports.getUserById = async (req, res) => {
   const user = await User.findById(req.params.id).select(USER_LIST_SELECT).populate(USER_DETAIL_POPULATE);
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -94,6 +209,9 @@ exports.getUserById = async (req, res) => {
   res.json({ ...enriched, recentBlogs });
 };
 
+/**
+ * PATCH /api/users/:id/review — Audit/verify user profile
+ */
 exports.reviewUser = async (req, res) => {
   const { decision, note } = req.body;
   validateUserReview({ decision, note });
@@ -122,7 +240,6 @@ exports.reviewUser = async (req, res) => {
     user.profileReviewStatus = 'needs_attention';
     user.lastProfileReviewNote = note.trim();
   }
-  // 'noted' keeps current status but records the note in history
 
   await user.save();
 
@@ -138,6 +255,9 @@ exports.reviewUser = async (req, res) => {
   });
 };
 
+/**
+ * GET /api/users/review-queue — Queue of external creator accounts needing review
+ */
 exports.getUserReviewQueue = async (req, res) => {
   const filter = {
     role: { $in: EXTERNAL_CREATORS },
