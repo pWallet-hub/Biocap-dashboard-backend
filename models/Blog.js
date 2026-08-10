@@ -85,7 +85,14 @@ const BlogSchema = new mongoose.Schema(
     author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     authorRole: {
       type: String,
-      enum: ALL_ROLES,
+      enum: ALL_ROLES || [
+        'admin',
+        'communication_officer',
+        'editor',
+        'social_media_content_creator',
+        'media_correspondent',
+        'principal_investigator',
+      ],
       required: true,
     },
 
@@ -132,15 +139,28 @@ BlogSchema.index({ isDeleted: 1, status: 1 });
 
 // ─── Pre-validate hook ───────────────────────────────────────────────────────
 BlogSchema.pre('validate', function () {
-  if (this.authorRole === ROLES.SOCIAL_MEDIA_CONTENT_CREATOR && !this.socialHandle) {
+  const socialRole = ROLES?.SOCIAL_MEDIA_CONTENT_CREATOR || 'social_media_content_creator';
+  const mediaRole = ROLES?.MEDIA_CORRESPONDENT || 'media_correspondent';
+  const legacyMediaRole = ROLES?.BROADCAST_CONTENT_CREATOR || 'broadcast_content_creator';
+
+  if (this.authorRole === socialRole && !this.socialHandle) {
     throw new Error('socialHandle is required for social_media_content_creator posts');
   }
-  if (this.authorRole === ROLES.BROADCAST_CONTENT_CREATOR && !this.organizationLink) {
-    throw new Error('organizationLink is required for broadcast_content_creator posts');
+  
+  if ((this.authorRole === mediaRole || this.authorRole === legacyMediaRole) && !this.organizationLink) {
+    throw new Error('organizationLink is required for media_correspondent posts');
   }
 });
 
 // ─── Instance methods ────────────────────────────────────────────────────────
+
+/**
+ * Helper to safely extract String ID whether document field is populated or raw ObjectId
+ */
+const getObjectIdString = (field) => {
+  if (!field) return '';
+  return field._id ? field._id.toString() : field.toString();
+};
 
 /**
  * Returns true if the blog's owner is allowed to modify it (only while in draft).
@@ -156,14 +176,19 @@ BlogSchema.methods.canOwnerModify = function () {
  * Owner: only their own draft.
  */
 BlogSchema.methods.canBeEditedBy = function (user) {
-  if (user.role === ROLES.ADMIN) return true;
+  const adminRole = ROLES?.ADMIN || 'admin';
+  if (user.role === adminRole) return true;
 
   if (this.status === 'published') {
     return false;
   }
 
-  const isReviewerRole = REVIEWERS.includes(user.role);
-  const isOwner = this.originalAuthor.toString() === user.id || this.author.toString() === user.id;
+  const isReviewerRole = REVIEWERS ? REVIEWERS.includes(user.role) : false;
+  const originalAuthorId = getObjectIdString(this.originalAuthor);
+  const authorId = getObjectIdString(this.author);
+  const userId = user.id || user._id?.toString();
+
+  const isOwner = originalAuthorId === userId || authorId === userId;
 
   if (isReviewerRole) return true;
   return isOwner && this.canOwnerModify();
@@ -174,10 +199,18 @@ BlogSchema.methods.canBeEditedBy = function (user) {
  * Published blogs are admin-only to delete.
  */
 BlogSchema.methods.canBeDeletedBy = function (user) {
-  if (this.status === 'published') return user.role === ROLES.ADMIN;
-  const isReviewerRole = REVIEWERS.includes(user.role);
+  const adminRole = ROLES?.ADMIN || 'admin';
+  if (this.status === 'published') return user.role === adminRole;
+
+  const isReviewerRole = REVIEWERS ? REVIEWERS.includes(user.role) : false;
   if (isReviewerRole) return true;
-  return (this.originalAuthor.toString() === user.id || this.author.toString() === user.id) && this.canOwnerModify();
+
+  const originalAuthorId = getObjectIdString(this.originalAuthor);
+  const authorId = getObjectIdString(this.author);
+  const userId = user.id || user._id?.toString();
+
+  const isOwner = originalAuthorId === userId || authorId === userId;
+  return isOwner && this.canOwnerModify();
 };
 
 module.exports = mongoose.model('Blog', BlogSchema);

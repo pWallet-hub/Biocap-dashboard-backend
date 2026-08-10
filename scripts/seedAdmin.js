@@ -22,7 +22,7 @@ async function seedAdmin() {
   const hashedPassword = await bcrypt.hash(rawPassword, salt);
 
   // ─── UPSERT ADMIN USER ───────────────────────────────────────────────
-  // Upsert ensures clean updates with NO password expiry or block flags
+  // Uses exact official partner organization string to pass enum checks
   const adminData = {
     username: 'felix.rugangazi',
     email,
@@ -30,19 +30,19 @@ async function seedAdmin() {
     role: 'admin',
     firstName: 'Felix',
     lastName: 'Rugangazi',
-    organization: 'afs-rwanda',
+    organization: 'Alliance for Science Rwanda (AfS-Rwanda)', // 👈 Full official partner institution name
     organizationLink: 'https://afs-rwanda.org',
     socialHandle: '@felix_rugangazi',
     dateOfBirth: '1995-05-15',
     isPasswordResetRequired: false, // 👈 Fixes 403 Forbidden on login
     isActive: true,                 // 👈 Fixes 403 account disabled check
-    isApproved: true,               // 👈 Fixes 403 approval pending check
+    profileReviewStatus: 'verified',
   };
 
   const admin = await User.findOneAndUpdate(
     { email },
     { $set: adminData },
-    { new: true, upsert: true, runValidators: false }
+    { new: true, upsert: true, runValidators: true }
   );
 
   console.log('🎉 Admin user successfully created/updated in MongoDB!');

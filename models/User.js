@@ -12,6 +12,24 @@ const ORGANIZATIONS = [
   'Alliance for Science Rwanda (AfS-Rwanda)',
 ];
 
+/**
+ * Normalizes input organization values.
+ * Auto-converts legacy abbreviations ('ASR-RWANDA', 'asr-rwanda', 'afs-rwanda', etc.) to the exact enum value.
+ */
+const normalizeOrganization = (val) => {
+  if (!val) return val;
+  const lower = val.toString().toLowerCase().trim();
+  if (
+    lower === 'asr-rwanda' || 
+    lower === 'afs-rwanda' || 
+    lower.includes('alliance for science') ||
+    lower.includes('asr')
+  ) {
+    return 'Alliance for Science Rwanda (AfS-Rwanda)';
+  }
+  return val;
+};
+
 const UserReviewLogSchema = new mongoose.Schema(
   {
     decision: {
@@ -50,10 +68,9 @@ const UserSchema = new mongoose.Schema(
     lastName: { type: String, required: true, trim: true },
     dateOfBirth: { type: Date },
 
-    // Mandatory Job Title — displayed as Author Byline with published articles
+    // Optional Job Title in base schema (used for author bylines)
     jobTitle: { 
       type: String, 
-      required: [true, 'Job Title is required for author bylines'], 
       trim: true 
     },
 
@@ -64,6 +81,7 @@ const UserSchema = new mongoose.Schema(
     organization: { 
       type: String, 
       required: [true, 'Partner Institution is required'],
+      set: normalizeOrganization, // Auto-converts 'ASR-RWANDA' on assignment
       enum: {
         values: ORGANIZATIONS,
         message: '{VALUE} is not a valid Rwanda BioCap partner institution',
@@ -113,11 +131,30 @@ UserSchema.index({ createdAt: -1 });
 
 // ─── Pre-validate hook ───────────────────────────────────────────────────────
 UserSchema.pre('validate', function () {
+  // 1. Force normalization of legacy database values (e.g., 'ASR-RWANDA', 'afs-rwanda')
+  if (this.organization) {
+    this.organization = normalizeOrganization(this.organization);
+  }
+
   const targetMediaRole = ROLES?.MEDIA_CORRESPONDENT || 'media_correspondent';
   const legacyMediaRole = ROLES?.BROADCAST_CONTENT_CREATOR || 'broadcast_content_creator';
+  const isAdmin = this.role === 'admin';
 
+  // 2. Admins do not require organization links or job titles
+  if (isAdmin) {
+    return;
+  }
+
+  // 3. Validate organizationLink requirement for Media Correspondents
   if ((this.role === targetMediaRole || this.role === legacyMediaRole) && !this.organizationLink) {
     throw new Error('organizationLink is required for Media Correspondent accounts');
+  }
+
+  // 4. Require jobTitle ONLY during NEW user registration (this.isNew)
+  const isAfSRwanda = this.organization === 'Alliance for Science Rwanda (AfS-Rwanda)';
+
+  if (this.isNew && !isAfSRwanda && (!this.jobTitle || !this.jobTitle.trim())) {
+    throw new Error('Job Title is required for author bylines');
   }
 });
 
