@@ -35,6 +35,20 @@ const ReviewLogSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const ChangeRequestSchema = new mongoose.Schema(
+  {
+    commenter: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    role: { type: String, trim: true },
+    comment: { type: String, trim: true, required: true },
+    requestedAt: { type: Date, default: Date.now },
+    implemented: { type: Boolean, default: false },
+    implementedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    implementedAt: { type: Date },
+    implementationNote: { type: String, trim: true },
+  },
+  { _id: true }
+);
+
 // ─── Comment Schema for Published Articles ──────────────────────────────────
 const CommentSchema = new mongoose.Schema(
   {
@@ -107,6 +121,8 @@ const BlogSchema = new mongoose.Schema(
     submittedAt: { type: Date },
     lastRejectionNote: { type: String },
     reviewHistory: { type: [ReviewLogSchema], default: [] },
+    // Change requests created by reviewers (editor/admin/officer)
+    changeRequests: { type: [ChangeRequestSchema], default: [] },
 
     publishedAt: { type: Date },
     publishedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

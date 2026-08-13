@@ -1,7 +1,9 @@
 const mongoose = require('mongoose');
 const User = require('../models/User');
 const Blog = require('../models/Blog');
+const Notification = require('../models/Notification');
 const { parsePagination, paginatedResponse } = require('../utils/pagination');
+const { writeAuditLog } = require('../utils/auditLogger');
 
 /**
  * GET /api/contributor/profile
@@ -153,4 +155,63 @@ exports.getPublishedBlogBySlug = async (req, res) => {
   }
 
   res.json(blog);
+};
+
+/**
+ * PATCH /api/contributor/blogs/:id/change-implemented
+ * Mark a requested change as implemented by the creator.
+ */
+exports.markChangeImplemented = async (req, res) => {
+  const { implementationNote, changeId } = req.body || {};
+
+  const blog = await Blog.findOne({ _id: req.params.id, originalAuthor: req.user._id, isDeleted: false });
+  if (!blog) return res.status(404).json({ error: 'Blog not found' });
+
+  if (!blog.changeRequests || blog.changeRequests.length === 0) {
+    return res.status(400).json({ error: 'No change requests exist for this article' });
+  }
+
+  let change = null;
+  if (changeId) {
+    change = blog.changeRequests.id(changeId);
+  } else {
+    change = blog.changeRequests.find((c) => !c.implemented);
+  }
+
+  if (!change) {
+    return res.status(400).json({ error: 'No pending change request found to mark implemented' });
+  }
+
+  change.implemented = true;
+  change.implementedBy = req.user._id;
+  change.implementedAt = new Date();
+  if (implementationNote && implementationNote.trim()) change.implementationNote = implementationNote.trim();
+
+  await blog.save();
+
+  // Notify the original requester (reviewer/editor/admin) that the change was implemented
+  if (Notification && change.commenter) {
+    try {
+      await Notification.create({
+        recipient: change.commenter,
+        sender: req.user._id,
+        type: 'CHANGE_REQUEST_IMPLEMENTED',
+        message: `${req.user.firstName || req.user.username} marked requested change implemented on "${blog.title}"`,
+        article: blog._id,
+      });
+    } catch (err) {
+      console.error('Failed to create change-implemented notification:', err.message);
+    }
+  }
+
+  await writeAuditLog({
+    req,
+    action: 'CHANGE_IMPLEMENTED',
+    targetModel: 'Blog',
+    targetId: blog._id,
+    targetLabel: blog.title,
+    detail: { changeId: change._id.toString() },
+  });
+
+  res.json({ message: 'Change marked implemented', blog });
 };

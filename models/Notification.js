@@ -19,7 +19,7 @@ const NotificationSchema = new mongoose.Schema(
     // Notification type to handle UI badge icons and routing
     type: {
       type: String,
-      enum: ['ARTICLE_COMMENT', 'EDITOR_EDIT_PROMPT', 'BLOG_APPROVED'],
+      enum: ['ARTICLE_COMMENT', 'EDITOR_EDIT_PROMPT', 'BLOG_APPROVED', 'CHANGE_REQUEST', 'CHANGE_REQUEST_IMPLEMENTED'],
       required: true,
     },
     

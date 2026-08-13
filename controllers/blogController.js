@@ -128,7 +128,8 @@ exports.getBlogs = async (req, res) => {
       .populate('originalAuthor', 'username email role firstName lastName')
       .populate('author', 'username email role firstName lastName')
       .populate('publishedBy', 'username firstName lastName')
-      .populate('reviewHistory.reviewer', 'username firstName lastName'),
+      .populate('reviewHistory.reviewer', 'username firstName lastName')
+      .populate('changeRequests.commenter', 'username firstName lastName role'),
     Blog.countDocuments(filter),
   ]);
 
@@ -168,7 +169,8 @@ exports.getBlogById = async (req, res) => {
     .populate('originalAuthor', 'username email role firstName lastName socialHandle organization organizationLink')
     .populate('author', 'username email role firstName lastName socialHandle organization organizationLink')
     .populate('publishedBy', 'username firstName lastName')
-    .populate('reviewHistory.reviewer', 'username firstName lastName role');
+    .populate('reviewHistory.reviewer', 'username firstName lastName role')
+    .populate('changeRequests.commenter', 'username firstName lastName role');
 
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
 
@@ -276,7 +278,7 @@ exports.createBlog = async (req, res) => {
     targetLabel: blog.title,
   });
 
-  res.status(201).json(blog);
+  res.status(201).json({ message: 'Created successfully', blog });
 };
 
 /**
@@ -351,7 +353,7 @@ exports.updateBlog = async (req, res) => {
     targetLabel: blog.title,
   });
 
-  res.json(blog);
+  res.json({ message: 'Blog updated successfully', blog });
 };
 
 exports.deleteBlog = async (req, res) => {
@@ -505,9 +507,18 @@ exports.reviewBlog = async (req, res) => {
     blog.status = 'approved';
     blog.lastRejectionNote = undefined;
   } else {
+    // Record structured change request so the creator can track and mark implementation
     blog.status = 'draft';
     blog.lastRejectionNote = note;
     blog.submittedAt = undefined;
+    if (!blog.changeRequests) blog.changeRequests = [];
+    blog.changeRequests.push({
+      commenter: req.user.id,
+      role: req.user.role,
+      comment: note,
+      requestedAt: new Date(),
+      implemented: false,
+    });
   }
 
   await blog.save();
@@ -534,6 +545,20 @@ exports.reviewBlog = async (req, res) => {
       sendBlogRejectionEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title, note).catch((err) =>
         console.error('[Email] Failed to send rejection email:', err.message)
       );
+      // Send in-app notification to the original author about requested changes
+      if (Notification) {
+        try {
+          await Notification.create({
+            recipient: blog.originalAuthor._id || blog.originalAuthor,
+            sender: req.user.id,
+            type: 'CHANGE_REQUEST',
+            message: `Reviewer asked for changes on "${blog.title}": ${note}`,
+            article: blog._id,
+          });
+        } catch (err) {
+          console.error('Failed to create change request notification:', err.message);
+        }
+      }
     }
   }
 

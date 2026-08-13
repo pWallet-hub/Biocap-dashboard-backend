@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 
 const blogController = require('../controllers/blogController');
-const { protect, authorize, adminOnly } = require('../middleware/authMiddleware');
+const { protect, authorize, adminOnly, publisherOnly } = require('../middleware/authMiddleware');
 const { uploadBlogFiles } = require('../middleware/upload');
 const { parseBlogBody } = require('../middleware/validateBlogInput');
 const asyncHandler = require('../utils/asyncHandler');
@@ -307,7 +307,7 @@ router.patch('/:id/submit', protect, authorize(...CREATORS), asyncHandler(blogCo
  * @swagger
  * /api/blogs/{id}/review:
  *   patch:
- *     summary: Approve or reject a submitted blog (admin/communication_officer only)
+ *     summary: Approve or reject a submitted blog (admin, communication_officer, editor)
  *     tags: [Blogs]
  *     security:
  *       - bearerAuth: []
@@ -340,7 +340,7 @@ router.patch('/:id/review', protect, authorize(...REVIEWERS), asyncHandler(blogC
  * @swagger
  * /api/blogs/{id}/publish:
  *   patch:
- *     summary: Publish an approved blog to the live website (ADMIN ONLY)
+ *     summary: Publish an approved blog to the live website (admin, communication_officer, editor)
  *     tags: [Blogs]
  *     security:
  *       - bearerAuth: []
@@ -354,7 +354,7 @@ router.patch('/:id/review', protect, authorize(...REVIEWERS), asyncHandler(blogC
  *       400: { description: Blog not in approved status }
  *       403: { description: Admin only }
  */
-router.patch('/:id/publish', protect, adminOnly, asyncHandler(blogController.publishBlog));
+router.patch('/:id/publish', protect, publisherOnly, asyncHandler(blogController.publishBlog));
 
 /**
  * @swagger

@@ -32,7 +32,8 @@ const ORGANIZATIONS = [
 const REVIEWERS = [ROLES.ADMIN, ROLES.COMMUNICATION_OFFICER, ROLES.EDITOR];
 
 /** Roles that can publish/unpublish blogs to the live site */
-const PUBLISHERS = [ROLES.ADMIN, ROLES.COMMUNICATION_OFFICER];
+// Include `editor` so editors and communication officers can publish
+const PUBLISHERS = [ROLES.ADMIN, ROLES.COMMUNICATION_OFFICER, ROLES.EDITOR];
 
 /** Roles that can view/edit users and review profiles */
 const USER_MANAGERS = [ROLES.ADMIN, ROLES.COMMUNICATION_OFFICER];

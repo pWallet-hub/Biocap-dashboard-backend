@@ -167,6 +167,39 @@ router.patch('/blogs/:id/submit', asyncHandler(blogController.submitBlog));
 
 /**
  * @swagger
+ * /api/contributor/blogs/{id}/change-implemented:
+ *   patch:
+ *     summary: Mark a reviewer-requested change as implemented (creator only)
+ *     tags: [Content Creator]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               changeId:
+ *                 type: string
+ *                 description: ID of the changeRequests item to mark implemented (optional)
+ *               implementationNote:
+ *                 type: string
+ *                 description: Optional note describing what was changed
+ *     responses:
+ *       200: { description: Change marked implemented and updated blog returned }
+ *       400: { description: No pending change to mark or bad request }
+ *       403: { description: Forbidden — only the original author may perform this action }
+ *       404: { description: Blog not found }
+ */
+router.patch('/blogs/:id/change-implemented', asyncHandler(creatorController.markChangeImplemented));
+
+/**
+ * @swagger
  * /api/contributor/blogs/{id}:
  *   delete:
  *     summary: Soft delete personal draft story

@@ -225,6 +225,26 @@ router.patch('/blogs/:id/review', asyncHandler(blogController.reviewBlog));
 
 /**
  * @swagger
+ * /api/editor/blogs/{id}/publish:
+ *   patch:
+ *     summary: Publish an approved blog to the live website (editor or admin)
+ *     tags: [Communication Editor]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Blog published successfully }
+ *       400: { description: Blog not in approved status }
+ *       403: { description: Forbidden }
+ */
+router.patch('/blogs/:id/publish', asyncHandler(blogController.publishBlog));
+
+/**
+ * @swagger
  * /api/editor/blogs/{id}/unpublish:
  *   patch:
  *     summary: Return a published article back to approved status for revision
