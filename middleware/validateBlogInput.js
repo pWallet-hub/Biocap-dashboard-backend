@@ -27,6 +27,15 @@ const parseBlogBody = (req, res, next) => {
       }
     }
 
+    let excerptBlocks = [];
+    if (body.excerptBlocks) {
+      try {
+        excerptBlocks = typeof body.excerptBlocks === 'string' ? JSON.parse(body.excerptBlocks) : body.excerptBlocks;
+      } catch (err) {
+        return res.status(400).json({ error: '"excerptBlocks" must be valid JSON' });
+      }
+    }
+
     req.parsedBody = {
       title,
       tag,
@@ -35,6 +44,7 @@ const parseBlogBody = (req, res, next) => {
       organizationLink,
       modal: modal || {},
       blocks: Array.isArray(blocks) ? blocks : [],
+      excerptBlocks: Array.isArray(excerptBlocks) ? excerptBlocks : [],
     };
 
     next();

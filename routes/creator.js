@@ -3,7 +3,7 @@ const router = express.Router();
 const creatorController = require('../controllers/creatorController');
 const blogController = require('../controllers/blogController');
 const { protect, authorize } = require('../middleware/authMiddleware');
-const upload = require('../middleware/upload');
+const { uploadBlogFiles } = require('../middleware/upload');
 const { parseBlogBody } = require('../middleware/validateBlogInput');
 const asyncHandler = require('../utils/asyncHandler');
 const { EXTERNAL_CREATORS } = require('../constants/roles');
@@ -11,12 +11,6 @@ const { EXTERNAL_CREATORS } = require('../constants/roles');
 // Enforce Authentication and Creator Role Authorization for all routes below
 router.use(protect);
 router.use(authorize(...EXTERNAL_CREATORS));
-
-// File upload configuration for multi-part forms
-const blogUploadFields = upload.fields([
-  { name: 'img', maxCount: 1 },
-  { name: 'document', maxCount: 1 },
-]);
 
 /**
  * @swagger
@@ -109,12 +103,18 @@ router.get('/my-blogs/:id', asyncHandler(creatorController.getMyBlogById));
  *               excerpt: { type: string }
  *               blocks: { type: string, description: "JSON stringified blocks" }
  *               modal: { type: string, description: "JSON stringified modal metadata" }
+ *               socialHandle: { type: string }
+ *               organizationLink: { type: string }
  *               img: { type: string, format: binary }
+ *               images:
+ *                 type: array
+ *                 items: { type: string, format: binary }
+ *                 description: "Array of inline section images"
  *               document: { type: string, format: binary }
  *     responses:
  *       201: { description: Draft created }
  */
-router.post('/blogs', blogUploadFields, parseBlogBody, asyncHandler(blogController.createBlog));
+router.post('/blogs', uploadBlogFiles, parseBlogBody, asyncHandler(blogController.createBlog));
 
 /**
  * @swagger
@@ -140,12 +140,18 @@ router.post('/blogs', blogUploadFields, parseBlogBody, asyncHandler(blogControll
  *               excerpt: { type: string }
  *               blocks: { type: string }
  *               modal: { type: string }
+ *               socialHandle: { type: string }
+ *               organizationLink: { type: string }
  *               img: { type: string, format: binary }
+ *               images:
+ *                 type: array
+ *                 items: { type: string, format: binary }
+ *                 description: "Updated inline section images"
  *               document: { type: string, format: binary }
  *     responses:
  *       200: { description: Blog updated }
  */
-router.put('/blogs/:id', blogUploadFields, parseBlogBody, asyncHandler(blogController.updateBlog));
+router.put('/blogs/:id', uploadBlogFiles, parseBlogBody, asyncHandler(blogController.updateBlog));
 
 /**
  * @swagger

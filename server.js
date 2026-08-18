@@ -69,7 +69,7 @@ app.use((req, res, next) => {
 // Sanitize inputs against MongoDB Operator Injection
 app.use(mongoSanitize());
 
-// --- Swagger Configuration Options (FIXED) ---
+// --- Swagger Configuration Options ---
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
@@ -99,12 +99,14 @@ const swaggerOptions = {
       },
     },
   },
-  // 🚨 MULTI-PATH RESOLUTION: Guarantees scanning regardless of working execution directory or hosting environment
   apis: [
-    path.resolve(__dirname, 'routes', '*.js'),
-    path.resolve(__dirname, 'routes', '**', '*.js'),
-    path.join(__dirname, './routes/*.js'),
-    './routes/*.js',
+    path.resolve(__dirname, 'routes', 'auth.js'),
+    path.resolve(__dirname, 'routes', 'blog.js'),
+    path.resolve(__dirname, 'routes', 'creator.js'),
+    path.resolve(__dirname, 'routes', 'editor.js'),
+    path.resolve(__dirname, 'routes', 'officer.js'),
+    path.resolve(__dirname, 'routes', 'admin.js'),
+    path.resolve(__dirname, 'routes', 'upload.js'),
   ],
 };
 
@@ -113,33 +115,24 @@ const swaggerDocs = swaggerJsdoc(swaggerOptions);
 // --- API Documentation Route ---
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 
-// --- Route Declarations with Safety Checks ---
+// --- Route Declarations & Role-Based Mount Aliases ---
 app.use('/api/upload', uploadRoutes);
 
-const routeMap = [
-  ['/api/auth', './routes/auth'],
-  ['/api/blogs', './routes/blog'],
-  ['/api/admin', './routes/admin'],
-  ['/api/officer', './routes/officer'],
-  ['/api/editor', './routes/editor'],
-  ['/api/contributor', './routes/creator'],
-];
+// Main blog routes module
+const blogRouter = require('./routes/blog');
 
-routeMap.forEach(([endpoint, filePath]) => {
-  try {
-    const routerModule = require(filePath);
-    
-    if (typeof routerModule !== 'function') {
-      console.error(`\n❌ CRITICAL ROUTE ERROR in ${filePath}:`);
-      console.error(`   The module returned "${typeof routerModule}" instead of an Express Router.`);
-      console.error(`   👉 Please check ${filePath} and verify it ends with: module.exports = router;\n`);
-    } else {
-      app.use(endpoint, routerModule);
-    }
-  } catch (err) {
-    console.error(`⚠️ Could not load route file at ${filePath}:`, err.message);
-  }
-});
+// Primary App Mount Points
+app.use('/api/auth', require('./routes/auth'));
+app.use('/api/blogs', blogRouter);
+app.use('/api/admin', require('./routes/admin'));
+app.use('/api/officer', require('./routes/officer'));
+
+// 🟢 ALIAS MOUNTS: Prevents 404s when Editor or Contributors hit role-prefixed URLs
+app.use('/api/editor/blogs', blogRouter);
+app.use('/api/editor', require('./routes/editor'));
+
+app.use('/api/contributor/blogs', blogRouter);
+app.use('/api/contributor', require('./routes/creator'));
 
 // Baseline health check route
 app.get('/', (req, res) => {

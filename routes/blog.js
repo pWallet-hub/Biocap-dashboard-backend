@@ -159,7 +159,7 @@ router.get('/:id', protect, asyncHandler(blogController.getBlogById));
  * @swagger
  * /api/blogs:
  *   post:
- *     summary: Create a blog post (always starts as draft). Supports image and optional PDF upload.
+ *     summary: Create a blog post (always starts as draft). Supports cover image, inline section images, and optional PDF upload.
  *     tags: [Blogs]
  *     security:
  *       - bearerAuth: []
@@ -169,15 +169,19 @@ router.get('/:id', protect, asyncHandler(blogController.getBlogById));
  *         multipart/form-data:
  *           schema:
  *             type: object
- *             required: [title, tag, excerpt, modal, img]
+ *             required: [title, tag, excerpt, img]
  *             properties:
  *               title: { type: string }
  *               tag: { type: string }
  *               excerpt: { type: string }
+ *               blocks: { type: string, description: "JSON-stringified array of section blocks" }
  *               socialHandle: { type: string, description: "Required for social_media_influencer" }
  *               organizationLink: { type: string, description: "Required for broadcast_media" }
- *               modal: { type: string, description: "JSON-stringified modal object (intro required)" }
  *               img: { type: string, format: binary, description: "Cover image (required)" }
+ *               images: 
+ *                 type: array
+ *                 items: { type: string, format: binary }
+ *                 description: "Array of inline section images"
  *               document: { type: string, format: binary, description: "Optional supporting PDF" }
  *     responses:
  *       201: { description: Blog created as draft }
@@ -209,10 +213,14 @@ router.post('/', protect, authorize(...CREATORS), uploadBlogFiles, parseBlogBody
  *               title: { type: string }
  *               tag: { type: string }
  *               excerpt: { type: string }
- *               modal: { type: string, description: "JSON-stringified" }
+ *               blocks: { type: string, description: "JSON-stringified section blocks" }
  *               socialHandle: { type: string }
  *               organizationLink: { type: string }
  *               img: { type: string, format: binary }
+ *               images: 
+ *                 type: array
+ *                 items: { type: string, format: binary }
+ *                 description: "Updated inline section images"
  *               document: { type: string, format: binary }
  *     responses:
  *       200: { description: Blog updated }

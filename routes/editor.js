@@ -6,14 +6,19 @@ const editorBlogController = require('../controllers/editorBlogController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const asyncHandler = require('../utils/asyncHandler');
 const { ROLES } = require('../constants/roles');
-const upload = require('../middleware/upload');
+const uploadModule = require('../middleware/upload');
 const { parseBlogBody } = require('../middleware/validateBlogInput');
 
 router.use(protect);
 router.use(authorize(ROLES.EDITOR, ROLES.ADMIN));
 
-const blogUploadFields = upload.fields([
+// Safely extract upload instance or pre-configured uploadBlogFiles
+const rawUpload = uploadModule.upload || uploadModule;
+
+// Configure fields including 'images' for inline section photos
+const blogUploadFields = uploadModule.uploadBlogFiles || rawUpload.fields([
   { name: 'img', maxCount: 1 },
+  { name: 'images', maxCount: 20 },
   { name: 'document', maxCount: 1 },
 ]);
 
@@ -133,6 +138,10 @@ router.get('/blogs/:id', asyncHandler(officerBlogController.getBlogById));
  *               blocks: { type: string, description: "JSON stringified blocks array" }
  *               modal: { type: string, description: "JSON stringified modal object" }
  *               img: { type: string, format: binary }
+ *               images: 
+ *                 type: array
+ *                 items: { type: string, format: binary }
+ *                 description: "Inline section images"
  *               document: { type: string, format: binary }
  *     responses:
  *       201:
@@ -164,6 +173,10 @@ router.post('/blogs', blogUploadFields, parseBlogBody, asyncHandler(blogControll
  *               excerpt: { type: string }
  *               blocks: { type: string, description: "JSON stringified blocks array" }
  *               img: { type: string, format: binary }
+ *               images: 
+ *                 type: array
+ *                 items: { type: string, format: binary }
+ *                 description: "Inline section images"
  *               document: { type: string, format: binary }
  *     responses:
  *       200:

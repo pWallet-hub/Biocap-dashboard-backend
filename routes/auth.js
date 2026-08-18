@@ -61,6 +61,27 @@ function normalizeOrganizationName(org) {
  */
 
 // ─── Register (Public Direct Registration) ─────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/register:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Create a new user account
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               username: { type: string }
+ *               email: { type: string }
+ *               password: { type: string }
+ *               role: { type: string }
+ *     responses:
+ *       201: { description: Account created }
+ *       400: { description: Validation error }
+ */
 router.post('/register', authLimiter, async (req, res) => {
   try {
     const {
@@ -138,6 +159,25 @@ router.post('/register', authLimiter, async (req, res) => {
 });
 
 // ─── Login ─────────────────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/login:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Authenticate and obtain access/refresh tokens
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email: { type: string }
+ *               password: { type: string }
+ *     responses:
+ *       200: { description: Returns accessToken and refreshToken }
+ *       401: { description: Invalid credentials }
+ */
 router.post('/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -213,6 +253,25 @@ router.post('/login', authLimiter, async (req, res) => {
 });
 
 // ─── Refresh Token ─────────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/refresh:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Exchange refresh token for a new access token
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               refreshToken: { type: string }
+ *               userId: { type: string }
+ *     responses:
+ *       200: { description: New accessToken }
+ *       401: { description: Invalid or expired refresh token }
+ */
 router.post('/refresh', async (req, res) => {
   try {
     const { refreshToken, userId } = req.body;
@@ -238,6 +297,17 @@ router.post('/refresh', async (req, res) => {
 });
 
 // ─── Logout ────────────────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/logout:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Logout current user and invalidate refresh token
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200: { description: Logged out }
+ */
 router.post('/logout', protect, async (req, res) => {
   try {
     await User.findByIdAndUpdate(req.user.id, { refreshToken: null });
@@ -257,6 +327,23 @@ router.post('/logout', protect, async (req, res) => {
 });
 
 // ─── Forgot Password ───────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/forgot-password:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Send a password reset link to the user's email
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email: { type: string }
+ *     responses:
+ *       200: { description: Reset email (if account exists) }
+ */
 router.post('/forgot-password', authLimiter, async (req, res) => {
   try {
     const { email } = req.body;
@@ -290,6 +377,24 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
 });
 
 // ─── Reset Password ────────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/reset-password:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Reset password using token sent via email
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               token: { type: string }
+ *               newPassword: { type: string }
+ *     responses:
+ *       200: { description: Password reset successful }
+ */
 router.post('/reset-password', authLimiter, async (req, res) => {
   try {
     const { token, new_password, newPassword } = req.body;
@@ -326,6 +431,26 @@ router.post('/reset-password', authLimiter, async (req, res) => {
 });
 
 // ─── Change Password ──────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/change-password:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Change current user's password
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               currentPassword: { type: string }
+ *               newPassword: { type: string }
+ *     responses:
+ *       200: { description: Password changed }
+ */
 router.post('/change-password', protect, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;

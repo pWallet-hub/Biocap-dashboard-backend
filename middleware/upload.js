@@ -13,7 +13,7 @@ const storage = new CloudinaryStorage({
       };
     }
 
-    // Cover Image storage
+    // Cover Image ('img') and Inline Section Images ('images')
     return {
       folder: 'blogs/images',
       resource_type: 'image',
@@ -23,12 +23,17 @@ const storage = new CloudinaryStorage({
 });
 
 const fileFilter = (req, file, cb) => {
-  if ((file.fieldname === 'img' || file.fieldname === 'image') && !file.mimetype.startsWith('image/')) {
-    return cb(new Error('img must be an image file (jpg, jpeg, png, webp)'), false);
+  // 🟢 Allow 'img', 'image', and 'images' field names
+  const isImageField = ['img', 'image', 'images'].includes(file.fieldname);
+
+  if (isImageField && !file.mimetype.startsWith('image/')) {
+    return cb(new Error('Uploaded file must be an image (jpg, jpeg, png, webp)'), false);
   }
+
   if (file.fieldname === 'document' && file.mimetype !== 'application/pdf') {
-    return cb(new Error('document must be a PDF file'), false);
+    return cb(new Error('Document must be a PDF file'), false);
   }
+
   cb(null, true);
 };
 
@@ -38,11 +43,15 @@ const upload = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max per file
 });
 
+// Configure exact fields accepted by POST/PUT blog endpoints
 const uploadBlogFiles = upload.fields([
-  { name: 'img', maxCount: 1 },
-  { name: 'document', maxCount: 1 },
+  { name: 'img', maxCount: 1 },        // Cover Image
+  { name: 'images', maxCount: 50 },    // Inline Section Images
+  { name: 'document', maxCount: 1 },   // PDF Document
 ]);
 
-module.exports = upload;
-module.exports.upload = upload;
-module.exports.uploadBlogFiles = uploadBlogFiles;
+// 🟢 Clean exports object
+module.exports = {
+  upload,
+  uploadBlogFiles,
+};

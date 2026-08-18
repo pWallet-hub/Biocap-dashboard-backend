@@ -8,9 +8,11 @@ const { ROLES } = require('../constants/roles');
  * PUT /api/editor/blogs/:id
  * Editor updates an article — saves modifications and alerts Communication Officers to accept changes.
  */
+const { htmlToBlocks } = require('../utils/htmlToBlocks');
+
 exports.updateBlogByEditor = async (req, res) => {
   const { id } = req.params;
-  const { title, excerpt, blocks, tag } = req.body;
+  const { title, excerpt, blocks, tag, bodyHtml } = req.body;
 
   const blog = await Blog.findOne({ _id: id, isDeleted: false });
   if (!blog) {
@@ -37,6 +39,16 @@ exports.updateBlogByEditor = async (req, res) => {
     updatedImg = req.files.img[0].path || req.files.img[0].secure_url || req.files.img[0].location;
   }
 
+  // If blocks are empty but bodyHtml provided, parse to structured blocks
+  if ((!parsedBlocks || parsedBlocks.length === 0) && bodyHtml && typeof bodyHtml === 'string') {
+    try {
+      const parsed = htmlToBlocks(bodyHtml);
+      if (parsed && parsed.length) parsedBlocks = parsed;
+    } catch (e) {
+      console.error('htmlToBlocks parse failed in editor update:', e.message);
+    }
+  }
+
   // 1. Record proposed editor modifications
   blog.editorModifications = {
     editor: req.user.id,
@@ -44,6 +56,7 @@ exports.updateBlogByEditor = async (req, res) => {
     excerpt: excerpt?.trim() || blog.excerpt,
     blocks: parsedBlocks,
     img: updatedImg,
+    bodyHtml: typeof bodyHtml === 'string' ? bodyHtml : '',
     modifiedAt: new Date(),
   };
 

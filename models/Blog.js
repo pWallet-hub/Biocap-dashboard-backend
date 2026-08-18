@@ -5,13 +5,17 @@ const BlockSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      enum: ['p', 'h2', 'quote', 'emphasis', 'image'],
+      enum: ['hero','h1', 'h2', 'p', 'quote', 'emphasis', 'image', 'list', 'html', 'embed'],
       required: true,
     },
     text: { type: String, trim: true },
     source: { type: String, trim: true },
     src: { type: String, trim: true },
     caption: { type: String, trim: true },
+    // Optional list items for 'list' blocks
+    items: { type: [String], default: undefined },
+    // Background image or hero image
+    background: { type: String, trim: true },
   },
   { _id: false }
 );
@@ -76,9 +80,11 @@ const BlogSchema = new mongoose.Schema(
     title: { type: String, required: true, trim: true },
     slug: { type: String, unique: true, lowercase: true, trim: true },
     tag: { type: String, required: true, trim: true },
-    excerpt: { type: String, required: true, trim: true },
-    
-    // Core content structured as flexible blocks
+    // Excerpt can be simple text or a structured block array (for embedded images)
+    excerpt: { type: String, trim: true },
+    excerptBlocks: { type: [BlockSchema], default: [] },
+
+    // Core content structured as flexible blocks (multiple sections)
     blocks: { type: [BlockSchema], default: [] },
 
     // Sidebar metadata

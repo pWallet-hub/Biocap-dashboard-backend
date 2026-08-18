@@ -11,6 +11,56 @@ const {
   sendBlogRejectionEmail,
   sendBlogPublishedEmail,
 } = require('../utils/sendEmail');
+const { htmlToBlocks } = require('../utils/htmlToBlocks');
+
+/**
+ * Map uploaded files (req.files.images) into blocks or excerptBlocks.
+ * Strategies used:
+ * 1. Exact match by originalname vs fileKey / uploadKey / src / source
+ * 2. Fallback by position (sequential index matching) if exact key matching fails
+ */
+const applyUploadedImagesToBlocks = (blocks = [], uploadedFiles = []) => {
+  if (!Array.isArray(blocks) || blocks.length === 0) return blocks;
+  if (!Array.isArray(uploadedFiles) || uploadedFiles.length === 0) return blocks;
+
+  const byOriginalName = new Map();
+  uploadedFiles.forEach((f) => {
+    if (f.originalname) byOriginalName.set(f.originalname, f);
+  });
+
+  let fileIndex = 0;
+
+  return blocks.map((blk) => {
+    if (!blk || typeof blk !== 'object') return blk;
+
+    if (blk.type === 'image' || blk.type === 'hero' || blk.type === 'embed' || blk.type === 'html') {
+      const fileKey = blk.fileKey || blk.uploadKey || blk.src || blk.source;
+      let matched = null;
+
+      // 1. Try matching by explicit originalname key
+      if (fileKey && byOriginalName.has(fileKey)) {
+        matched = byOriginalName.get(fileKey);
+      } else if (blk.src && byOriginalName.has(blk.src)) {
+        matched = byOriginalName.get(blk.src);
+      }
+
+      // 2. Sequential fallback if key lookup missed
+      if (!matched && uploadedFiles[fileIndex]) {
+        matched = uploadedFiles[fileIndex];
+      }
+
+      if (matched) {
+        fileIndex++;
+        const newBlk = { ...blk };
+        newBlk.src = matched.path || matched.location || matched.url || matched.secure_url || blk.src;
+        newBlk.source = matched.filename || matched.public_id || matched.key || newBlk.source;
+        return newBlk;
+      }
+    }
+
+    return blk;
+  });
+};
 
 // ─── Private Helpers ──────────────────────────────────────────────────────────
 
@@ -227,18 +277,20 @@ exports.createBlog = async (req, res) => {
   }
 
   const bodyData = req.parsedBody || req.body || {};
-  let { title, tag, excerpt, socialHandle, organizationLink, modal, blocks } = bodyData;
-
-  if (!title || !tag || !excerpt) {
-    return res.status(400).json({ error: 'title, tag, and excerpt are required' });
-  }
+  let { title, tag, excerpt, excerptBlocks, socialHandle, organizationLink, modal, blocks, bodyHtml } = bodyData;
 
   if (typeof blocks === 'string') {
     try { blocks = JSON.parse(blocks); } catch (e) { blocks = []; }
   }
-
+  if (typeof excerptBlocks === 'string') {
+    try { excerptBlocks = JSON.parse(excerptBlocks); } catch (e) { excerptBlocks = []; }
+  }
   if (typeof modal === 'string') {
     try { modal = JSON.parse(modal); } catch (e) { modal = {}; }
+  }
+
+  if (!title || !tag || (!(excerpt && excerpt.trim()) && (!Array.isArray(excerptBlocks) || excerptBlocks.length === 0) && (!Array.isArray(blocks) || blocks.length === 0))) {
+    return res.status(400).json({ error: 'title, tag, and at least one of excerpt/excerptBlocks/blocks is required' });
   }
 
   const author = await User.findById(req.user.id).select('socialHandle organizationLink role');
@@ -247,17 +299,24 @@ exports.createBlog = async (req, res) => {
   const imgPublicId = imgFile.filename || imgFile.public_id || '';
   const docPublicId = docFile ? (docFile.filename || docFile.public_id || '') : '';
 
+  // Apply uploaded inline images to blocks and excerptBlocks
+  const inlineFiles = req.files?.images || [];
+  const finalBlocks = applyUploadedImagesToBlocks(Array.isArray(blocks) ? blocks : [], inlineFiles);
+  const finalExcerptBlocks = applyUploadedImagesToBlocks(Array.isArray(excerptBlocks) ? excerptBlocks : [], inlineFiles);
+
   const blog = await Blog.create({
     title,
     slug,
     tag,
     excerpt,
-    blocks: Array.isArray(blocks) ? blocks : [],
+    excerptBlocks: finalExcerptBlocks || [],
+    blocks: finalBlocks || [],
     modal: modal || {},
     socialHandle: socialHandle || author?.socialHandle,
     organizationLink: organizationLink || author?.organizationLink,
     img: imgFile.path,
     imgPublicId,
+    bodyHtml: bodyHtml || '',
     ...(docFile && {
       documentUrl: docFile.path,
       documentPublicId: docPublicId,
@@ -278,12 +337,25 @@ exports.createBlog = async (req, res) => {
     targetLabel: blog.title,
   });
 
+  // If frontend provided bodyHtml but no structured blocks, attempt to parse into blocks
+  try {
+    if ((!blog.blocks || blog.blocks.length === 0) && bodyHtml) {
+      const parsed = htmlToBlocks(bodyHtml);
+      if (parsed && parsed.length) {
+        blog.blocks = applyUploadedImagesToBlocks(parsed, req.files?.images || []);
+        await blog.save();
+      }
+    }
+  } catch (e) {
+    console.error('htmlToBlocks parse failed:', e.message);
+  }
+
   res.status(201).json({ message: 'Created successfully', blog });
 };
 
 /**
  * PUT /api/blogs/:id
- * Updates blog content. 
+ * Updates blog content.
  */
 exports.updateBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
@@ -301,10 +373,13 @@ exports.updateBlog = async (req, res) => {
   }
 
   const bodyData = req.parsedBody || req.body || {};
-  let { title, tag, excerpt, socialHandle, organizationLink, modal, blocks } = bodyData;
+  let { title, tag, excerpt, excerptBlocks, socialHandle, organizationLink, modal, blocks, bodyHtml } = bodyData;
 
   if (typeof blocks === 'string') {
     try { blocks = JSON.parse(blocks); } catch (e) {}
+  }
+  if (typeof excerptBlocks === 'string') {
+    try { excerptBlocks = JSON.parse(excerptBlocks); } catch (e) {}
   }
   if (typeof modal === 'string') {
     try { modal = JSON.parse(modal); } catch (e) {}
@@ -318,11 +393,16 @@ exports.updateBlog = async (req, res) => {
     }
   }
   if (tag) blog.tag = tag;
-  if (excerpt) blog.excerpt = excerpt;
+  if (excerpt !== undefined) blog.excerpt = excerpt;
+  if (excerptBlocks) blog.excerptBlocks = Array.isArray(excerptBlocks) ? excerptBlocks : blog.excerptBlocks;
   if (socialHandle) blog.socialHandle = socialHandle;
   if (organizationLink) blog.organizationLink = organizationLink;
   if (modal) blog.modal = modal;
   if (blocks) blog.blocks = Array.isArray(blocks) ? blocks : blog.blocks;
+
+  if (typeof bodyHtml === 'string') {
+    blog.bodyHtml = bodyHtml;
+  }
 
   blog.author = req.user.id;
   blog.authorRole = req.user.role;
@@ -341,6 +421,27 @@ exports.updateBlog = async (req, res) => {
     blog.documentUrl = docFile.path;
     blog.documentPublicId = docFile.filename || docFile.public_id || '';
     blog.documentName = docFile.originalname;
+  }
+
+  // Apply uploaded inline images to blocks and excerptBlocks
+  const inlineFiles = req.files?.images || [];
+  if (inlineFiles.length > 0) {
+    try {
+      blog.blocks = applyUploadedImagesToBlocks(Array.isArray(blog.blocks) ? blog.blocks : [], inlineFiles);
+      blog.excerptBlocks = applyUploadedImagesToBlocks(Array.isArray(blog.excerptBlocks) ? blog.excerptBlocks : [], inlineFiles);
+    } catch (e) {
+      console.error('Failed to apply uploaded inline images:', e.message);
+    }
+  }
+
+  // If blocks still empty but bodyHtml provided, attempt to parse to structured blocks
+  if ((!blog.blocks || blog.blocks.length === 0) && bodyHtml) {
+    try {
+      const parsed = htmlToBlocks(bodyHtml);
+      if (parsed && parsed.length) blog.blocks = parsed;
+    } catch (e) {
+      console.error('htmlToBlocks parse failed during update:', e.message);
+    }
   }
 
   await blog.save();
@@ -507,7 +608,6 @@ exports.reviewBlog = async (req, res) => {
     blog.status = 'approved';
     blog.lastRejectionNote = undefined;
   } else {
-    // Record structured change request so the creator can track and mark implementation
     blog.status = 'draft';
     blog.lastRejectionNote = note;
     blog.submittedAt = undefined;
@@ -523,7 +623,6 @@ exports.reviewBlog = async (req, res) => {
 
   await blog.save();
 
-  // Notify Officers when a blog is approved and ready for publishing
   if (decision === 'approved' && Notification) {
     const officers = await User.find({ role: ROLES.COMMUNICATION_OFFICER, isActive: true }).select('_id');
     const alerts = officers.map((off) => ({
@@ -545,7 +644,6 @@ exports.reviewBlog = async (req, res) => {
       sendBlogRejectionEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title, note).catch((err) =>
         console.error('[Email] Failed to send rejection email:', err.message)
       );
-      // Send in-app notification to the original author about requested changes
       if (Notification) {
         try {
           await Notification.create({
