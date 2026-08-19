@@ -92,10 +92,22 @@ router.post('/register', authLimiter, async (req, res) => {
       lastName,
       dateOfBirth,
       organization: rawOrganization,
-      organizationLink,
-      socialHandle,
+      jobTitle,
+      job_title,
+      title,
+      organizationLink: rawOrganizationLink,
+      organization_link,
+      socialHandle: rawSocialHandle,
+      social_handle,
       role,
     } = req.body;
+
+    const organizationLink = rawOrganizationLink || organization_link;
+    const socialHandle = rawSocialHandle || social_handle;
+
+    if (!username || !email || !password || !firstName || !lastName) {
+      return res.status(400).json({ message: 'Please fill out all required fields.' });
+    }
 
     if (!password || password.length < 8) {
       return res.status(400).json({ message: 'Password is required and must be at least 8 characters.' });
@@ -114,8 +126,17 @@ router.post('/register', authLimiter, async (req, res) => {
     }
 
     const organization = normalizeOrganizationName(rawOrganization);
+    const isAfSRwanda = organization === 'Alliance for Science Rwanda (AfS-Rwanda)';
 
-    const existingUser = await User.findOne({ $or: [{ email: email.toLowerCase() }, { username }] });
+    // Extract jobTitle from any key alias, or assign fallbacks if missing
+    let finalJobTitle = (jobTitle || job_title || title || '').toString().trim();
+    if (!finalJobTitle) {
+      finalJobTitle = isAfSRwanda ? 'AfS Representative' : 'Contributor';
+    }
+
+    const existingUser = await User.findOne({
+      $or: [{ email: email.toLowerCase().trim() }, { username: username.trim() }],
+    });
     if (existingUser) {
       return res.status(400).json({ message: 'A profile under this email or username already exists.' });
     }
@@ -124,14 +145,15 @@ router.post('/register', authLimiter, async (req, res) => {
     const hashedPassword = await bcrypt.hash(password, salt);
 
     const newUser = await User.create({
-      username,
-      email: email.toLowerCase(),
+      username: username.trim(),
+      email: email.toLowerCase().trim(),
       password: hashedPassword,
       role,
-      firstName,
-      lastName,
+      firstName: firstName.trim(),
+      lastName: lastName.trim(),
       dateOfBirth,
       organization,
+      jobTitle: finalJobTitle,
       organizationLink,
       socialHandle,
       isPasswordResetRequired: false,
@@ -154,6 +176,9 @@ router.post('/register', authLimiter, async (req, res) => {
       role: newUser.role,
     });
   } catch (error) {
+    if (error.name === 'ValidationError' || error.code === 11000) {
+      return res.status(400).json({ message: error.message });
+    }
     res.status(500).json({ error: error.message });
   }
 });

@@ -33,6 +33,99 @@ const normalizeOrganizationName = (org) => {
   return org;
 };
 
+exports.register = async (req, res) => {
+  try {
+    const {
+      username,
+      email,
+      password,
+      firstName,
+      lastName,
+      dateOfBirth,
+      organization,
+      jobTitle,
+      job_title,
+      title,
+      organizationLink,
+      organization_link,
+      socialHandle,
+      social_handle,
+      role,
+    } = req.body;
+
+    if (!username || !email || !password || !firstName || !lastName) {
+      return res.status(400).json({ error: 'Please fill out all required fields.' });
+    }
+
+    const normalizedOrg = normalizeOrganizationName(organization);
+    const isAfSRwanda = normalizedOrg === 'Alliance for Science Rwanda (AfS-Rwanda)';
+
+    // Extract job title from any payload key variant
+    let finalJobTitle = (jobTitle || job_title || title || '').toString().trim();
+
+    // Auto-assign default job title for AfS-Rwanda or general fallback if missing
+    if (!finalJobTitle) {
+      if (isAfSRwanda) {
+        finalJobTitle = 'AfS Representative';
+      } else {
+        finalJobTitle = 'Contributor';
+      }
+    }
+
+    const existingUser = await User.findOne({
+      $or: [
+        { email: email.toString().trim().toLowerCase() },
+        { username: username.toString().trim() },
+      ],
+    });
+
+    if (existingUser) {
+      return res.status(400).json({ error: 'Username or email already registered.' });
+    }
+
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+
+    const newUser = new User({
+      username: username.toString().trim(),
+      email: email.toString().trim().toLowerCase(),
+      password: hashedPassword,
+      firstName: firstName.toString().trim(),
+      lastName: lastName.toString().trim(),
+      dateOfBirth: dateOfBirth || undefined,
+      organization: normalizedOrg,
+      jobTitle: finalJobTitle,
+      organizationLink: (organizationLink || organization_link || '').toString().trim() || undefined,
+      socialHandle: (socialHandle || social_handle || '').toString().trim() || undefined,
+      role: role || 'principal_investigator',
+    });
+
+    await newUser.save();
+
+    const userObj = newUser.toObject();
+    delete userObj.password;
+    delete userObj.refreshToken;
+
+    return res.status(201).json({
+      message: 'Registration successful',
+      username: newUser.username,
+      role: newUser.role,
+      user: userObj,
+    });
+  } catch (err) {
+    console.error('Registration Error:', err);
+
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({ error: err.message });
+    }
+    if (err.code === 11000) {
+      return res.status(400).json({ error: 'Username or email already exists.' });
+    }
+
+    return res.status(400).json({ error: err.message || 'Server error during registration.' });
+  }
+};
+
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
