@@ -59,6 +59,36 @@ router.get('/public', asyncHandler(blogController.getPublicBlogs));
  */
 router.get('/public/:slug', asyncHandler(blogController.getPublicBlogBySlug));
 
+/**
+ * @swagger
+ * /api/blogs/public/{slug}/comments:
+ *   post:
+ *     summary: Add a public comment or reply to a published blog
+ *     tags: [Blogs]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, email, content]
+ *             properties:
+ *               name: { type: string }
+ *               email: { type: string }
+ *               phone: { type: string }
+ *               content: { type: string }
+ *               parentComment: { type: string, description: 'Optional parent comment id for replying' }
+ *     responses:
+ *       201: { description: Comment posted }
+ */
+router.post('/public/:slug/comments', asyncHandler(blogController.addPublicComment));
+
+router.get('/public/:slug/comments', asyncHandler(blogController.getPublicBlogBySlug));
+
+router.patch('/:id/comments/:commentId/hide', protect, authorize(...REVIEWERS), asyncHandler(blogController.hideComment));
+router.delete('/:id/comments/:commentId', protect, authorize(...REVIEWERS), asyncHandler(blogController.deleteComment));
+router.patch('/:id/consent', protect, asyncHandler(blogController.respondToEditorConsent));
+
 // ─── Authenticated list / stats ────────────────────────────────────────────────
 
 /**

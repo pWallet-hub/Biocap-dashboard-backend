@@ -13,7 +13,7 @@ const NotificationSchema = new mongoose.Schema(
     sender: { 
       type: mongoose.Schema.Types.ObjectId, 
       ref: 'User', 
-      required: true 
+      default: null 
     },
     
     // Notification type to handle UI badge icons and routing

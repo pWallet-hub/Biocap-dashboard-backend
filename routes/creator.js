@@ -173,6 +173,29 @@ router.patch('/blogs/:id/submit', asyncHandler(blogController.submitBlog));
 
 /**
  * @swagger
+ * /api/contributor/blogs/{id}/consent:
+ *   patch:
+ *     summary: Approve or reject editor changes before publishing
+ *     tags: [Content Creator]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [approved]
+ *             properties:
+ *               approved: { type: boolean }
+ *               note: { type: string }
+ *     responses:
+ *       200: { description: Consent recorded }
+ */
+router.patch('/blogs/:id/consent', asyncHandler(blogController.respondToEditorConsent));
+
+/**
+ * @swagger
  * /api/contributor/blogs/{id}/change-implemented:
  *   patch:
  *     summary: Mark a reviewer-requested change as implemented (creator only)

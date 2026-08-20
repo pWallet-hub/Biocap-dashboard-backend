@@ -89,6 +89,34 @@ const buildBlogFilter = (query, user) => {
   return filter;
 };
 
+const summarizeChanges = (before, after) => {
+  const items = [];
+
+  if (before.title !== after.title) items.push(`title changed from "${before.title}" to "${after.title}"`);
+  if (before.excerpt !== after.excerpt) items.push('excerpt updated');
+  if ((before.tag || '') !== (after.tag || '')) items.push(`tag changed from "${before.tag || ''}" to "${after.tag || ''}"`);
+  if (JSON.stringify(before.blocks || []) !== JSON.stringify(after.blocks || [])) items.push('body content updated');
+  if (JSON.stringify(before.excerptBlocks || []) !== JSON.stringify(after.excerptBlocks || [])) items.push('excerpt section updated');
+  if ((before.socialHandle || '') !== (after.socialHandle || '')) items.push('social handle updated');
+  if ((before.organizationLink || '') !== (after.organizationLink || '')) items.push('organization link updated');
+
+  return items.length ? items.join('; ') : 'content updated';
+};
+
+const findCommentById = (blog, commentId) => {
+  if (!blog || !commentId) return null;
+
+  const direct = blog.comments?.find((comment) => comment._id.toString() === commentId.toString() && !comment.isDeleted);
+  if (direct) return { comment: direct, parent: null };
+
+  for (const comment of blog.comments || []) {
+    const nested = (comment.replies || []).find((reply) => reply._id.toString() === commentId.toString() && !reply.isDeleted);
+    if (nested) return { comment: nested, parent: comment };
+  }
+
+  return null;
+};
+
 // ─── Public Endpoints (No Auth) ───────────────────────────────────────────────
 
 /**
@@ -147,7 +175,10 @@ exports.getPublicBlogBySlug = async (req, res) => {
     { slug: req.params.slug, status: 'published', isDeleted: false },
     { $inc: { views: 1 } },
     { new: true }
-  ).populate('originalAuthor', 'firstName lastName username socialHandle organization organizationLink');
+  )
+    .populate('originalAuthor', 'firstName lastName username socialHandle organization organizationLink')
+    .populate('comments.user', 'firstName lastName username email role')
+    .populate('comments.replies.user', 'firstName lastName username email role');
 
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
 
@@ -157,7 +188,151 @@ exports.getPublicBlogBySlug = async (req, res) => {
     delete blogObj.author;
   }
 
+  blogObj.comments = (blogObj.comments || [])
+    .filter((comment) => comment && !comment.isDeleted && comment.isVisible !== false)
+    .map((comment) => ({
+      ...comment,
+      replies: (comment.replies || []).filter((reply) => !reply.isDeleted && reply.isVisible !== false),
+    }));
+
   res.json(blogObj);
+};
+
+exports.addPublicComment = async (req, res) => {
+  const { slug } = req.params;
+  const { name, email, phone, content, parentComment } = req.body || {};
+
+  if (!name?.trim() || !email?.trim() || !content?.trim()) {
+    return res.status(400).json({ error: 'Name, email, and comment content are required.' });
+  }
+
+  const blog = await Blog.findOne({ slug, status: 'published', isDeleted: false });
+  if (!blog) return res.status(404).json({ error: 'Blog not found' });
+
+  const payload = {
+    name: name.trim(),
+    email: email.trim().toLowerCase(),
+    phone: phone?.trim() || '',
+    role: req.user?.role || 'guest',
+    user: req.user?.id || null,
+    content: content.trim(),
+    parentComment: parentComment || null,
+    isVisible: true,
+    isDeleted: false,
+    replies: [],
+    createdAt: new Date(),
+  };
+
+  if (parentComment) {
+    const target = findCommentById(blog, parentComment);
+    if (!target) {
+      return res.status(404).json({ error: 'Parent comment not found' });
+    }
+
+    if (target.parent) {
+      target.parent.replies.push(payload);
+    } else {
+      target.comment.replies.push(payload);
+    }
+  } else {
+    blog.comments.push(payload);
+  }
+
+  await blog.save();
+
+  const reviewers = await User.find({ role: { $in: [ROLES.ADMIN, ROLES.COMMUNICATION_OFFICER, ROLES.EDITOR] }, isActive: true });
+  if (reviewers.length > 0) {
+    const notifications = reviewers.map((reviewer) => ({
+      recipient: reviewer._id,
+      sender: req.user?._id || null,
+      type: 'ARTICLE_COMMENT',
+      message: `New comment on "${blog.title}" from ${payload.name}.`,
+      article: blog._id,
+    }));
+
+    await Notification.insertMany(notifications).catch((err) => console.error('Comment notification failed:', err.message));
+  }
+
+  res.status(201).json({ message: 'Comment added successfully', comment: parentComment ? payload : blog.comments[blog.comments.length - 1] });
+};
+
+exports.hideComment = async (req, res) => {
+  const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
+  if (!blog) return res.status(404).json({ error: 'Blog not found' });
+
+  const target = findCommentById(blog, req.params.commentId);
+  if (!target) return res.status(404).json({ error: 'Comment not found' });
+
+  const comment = target.comment;
+  comment.isVisible = false;
+  await blog.save();
+
+  res.json({ message: 'Comment hidden successfully', comment });
+};
+
+exports.deleteComment = async (req, res) => {
+  const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
+  if (!blog) return res.status(404).json({ error: 'Blog not found' });
+
+  const target = findCommentById(blog, req.params.commentId);
+  if (!target) return res.status(404).json({ error: 'Comment not found' });
+
+  const comment = target.comment;
+  comment.isDeleted = true;
+  comment.isVisible = false;
+  await blog.save();
+
+  res.json({ message: 'Comment deleted successfully' });
+};
+
+exports.respondToEditorConsent = async (req, res) => {
+  const { approved, note } = req.body || {};
+
+  const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false })
+    .populate('originalAuthor', 'firstName lastName email username')
+    .populate('author', 'firstName lastName email username');
+
+  if (!blog) return res.status(404).json({ error: 'Blog not found' });
+
+  const isWriter = blog.originalAuthor && blog.originalAuthor._id.toString() === req.user.id;
+  if (!isWriter && blog.author && blog.author._id.toString() !== req.user.id) {
+    return res.status(403).json({ error: 'Only the original writer can approve or reject editor changes.' });
+  }
+
+  if (approved === undefined || approved === null || approved === '') {
+    return res.status(400).json({ error: 'approved is required' });
+  }
+
+  blog.publishConsentStatus = approved ? 'approved' : 'rejected';
+  blog.publishConsentNote = note?.trim() || '';
+  blog.publishConsentBy = req.user.id;
+  blog.publishConsentRequestedAt = blog.publishConsentRequestedAt || new Date();
+
+  if (approved) {
+    blog.status = blog.status === 'published' ? 'published' : 'approved';
+  } else {
+    blog.status = 'draft';
+  }
+
+  await blog.save();
+
+  const recipient = blog.author && blog.author._id ? blog.author._id : blog.originalAuthor?._id;
+  if (recipient) {
+    await Notification.create({
+      recipient,
+      sender: req.user.id,
+      type: 'EDITOR_EDIT_PROMPT',
+      message: approved
+        ? `The writer approved changes to "${blog.title}" and publishing can proceed.`
+        : `The writer rejected the editor changes for "${blog.title}" and publication is blocked.`,
+      article: blog._id,
+    }).catch((err) => console.error('Consent notification failed:', err.message));
+  }
+
+  res.json({
+    message: approved ? 'Editor changes approved. This blog can continue to publication.' : 'Editor changes rejected. The blog has been returned to draft.',
+    blog,
+  });
 };
 
 // ─── Authenticated List / Detail ──────────────────────────────────────────────

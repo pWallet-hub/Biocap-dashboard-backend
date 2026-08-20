@@ -60,7 +60,9 @@ exports.updateBlogByEditor = async (req, res) => {
     modifiedAt: new Date(),
   };
 
-  // Flag that changes require Communication Officer acceptance
+  blog.publishConsentStatus = 'pending';
+  blog.publishConsentRequestedAt = new Date();
+  blog.publishConsentNote = 'Awaiting writer approval before publishing the editor changes.';
   blog.officerAcceptedChanges = false;
 
   // Update minor fields directly if provided
@@ -69,6 +71,20 @@ exports.updateBlogByEditor = async (req, res) => {
   }
 
   await blog.save();
+
+  const editorName = (await User.findById(req.user.id).select('firstName lastName username')) || { firstName: '', lastName: '', username: req.user.username || 'Editor' };
+  const editorDisplayName = [editorName.firstName, editorName.lastName].filter(Boolean).join(' ') || editorName.username || 'Editor';
+
+  // Notify the original writer of the article that editor changes need consent.
+  if (blog.originalAuthor && Notification) {
+    await Notification.create({
+      recipient: blog.originalAuthor,
+      sender: req.user.id,
+      type: 'EDITOR_EDIT_PROMPT',
+      message: `${editorDisplayName} changed the blog "${blog.title}". Please review the update and confirm whether the article can proceed to publishing.`,
+      article: blog._id,
+    }).catch((err) => console.error('Writer change notification failed:', err.message));
+  }
 
   // 2. Query all active Communication Officers
   const communicationOfficers = await User.find({
@@ -82,7 +98,7 @@ exports.updateBlogByEditor = async (req, res) => {
       recipient: officer._id,
       sender: req.user.id,
       type: 'EDITOR_EDIT_PROMPT',
-      message: `Editor ${req.user.firstName || req.user.username} made changes to the article "${blog.title}". Please review and accept changes.`,
+      message: `Editor ${editorDisplayName} made changes to the article "${blog.title}". Please review and accept changes.`,
       article: blog._id,
     }));
 

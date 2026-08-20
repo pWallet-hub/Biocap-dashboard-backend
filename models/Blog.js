@@ -56,9 +56,32 @@ const ChangeRequestSchema = new mongoose.Schema(
 // ─── Comment Schema for Published Articles ──────────────────────────────────
 const CommentSchema = new mongoose.Schema(
   {
-    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    name: { type: String, trim: true },
+    email: { type: String, trim: true, lowercase: true },
+    phone: { type: String, trim: true },
+    role: { type: String, trim: true, default: 'guest' },
     content: { type: String, required: true, trim: true },
+    parentComment: { type: mongoose.Schema.Types.ObjectId, default: null },
+    isVisible: { type: Boolean, default: true },
+    isDeleted: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now },
+    replies: {
+      type: [
+        {
+          user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+          name: { type: String, trim: true },
+          email: { type: String, trim: true, lowercase: true },
+          phone: { type: String, trim: true },
+          role: { type: String, trim: true, default: 'guest' },
+          content: { type: String, required: true, trim: true },
+          isVisible: { type: Boolean, default: true },
+          isDeleted: { type: Boolean, default: false },
+          createdAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
   },
   { timestamps: true }
 );
@@ -140,6 +163,16 @@ const BlogSchema = new mongoose.Schema(
 
     // ─── Comments on Published Articles ──────────────────────────────────────
     comments: { type: [CommentSchema], default: [] },
+
+    // Writer consent before a reviewer/editor-published article may go live
+    publishConsentStatus: {
+      type: String,
+      enum: ['not_required', 'pending', 'approved', 'rejected'],
+      default: 'not_required',
+    },
+    publishConsentRequestedAt: { type: Date },
+    publishConsentNote: { type: String, trim: true },
+    publishConsentBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 
     // Soft delete — admin can restore or permanently remove
     isDeleted: { type: Boolean, default: false },
