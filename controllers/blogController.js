@@ -103,14 +103,18 @@ const summarizeChanges = (before, after) => {
   return items.length ? items.join('; ') : 'content updated';
 };
 
+/**
+ * Finds any comment or nested reply by ID regardless of visibility/deletion state.
+ * Allows moderation endpoints (hide, unhide, soft-delete) to locate hidden comments.
+ */
 const findCommentById = (blog, commentId) => {
   if (!blog || !commentId) return null;
 
-  const direct = blog.comments?.find((comment) => comment._id.toString() === commentId.toString() && !comment.isDeleted);
+  const direct = blog.comments?.find((comment) => comment._id.toString() === commentId.toString());
   if (direct) return { comment: direct, parent: null };
 
   for (const comment of blog.comments || []) {
-    const nested = (comment.replies || []).find((reply) => reply._id.toString() === commentId.toString() && !reply.isDeleted);
+    const nested = (comment.replies || []).find((reply) => reply._id.toString() === commentId.toString());
     if (nested) return { comment: nested, parent: comment };
   }
 
@@ -128,7 +132,7 @@ exports.getPublicBlogs = async (req, res) => {
 
   const filter = { status: 'published', isDeleted: false };
   if (req.query.tag) filter.tag = { $regex: req.query.tag.trim(), $options: 'i' };
-  if (req.query.search?.trim()) filter.$text = { $search: query.search.trim() };
+  if (req.query.search?.trim()) filter.$text = { $search: req.query.search.trim() };
 
   const [blogs, total] = await Promise.all([
     Blog.find(filter)
@@ -256,6 +260,8 @@ exports.addPublicComment = async (req, res) => {
   res.status(201).json({ message: 'Comment added successfully', comment: parentComment ? payload : blog.comments[blog.comments.length - 1] });
 };
 
+// ─── Comment Moderation Endpoints ─────────────────────────────────────────────
+
 exports.hideComment = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
@@ -267,7 +273,37 @@ exports.hideComment = async (req, res) => {
   comment.isVisible = false;
   await blog.save();
 
+  writeAuditLog({
+    req,
+    action: 'blog.comment_hide',
+    targetModel: 'Blog',
+    targetId: blog._id,
+    targetLabel: blog.title,
+  });
+
   res.json({ message: 'Comment hidden successfully', comment });
+};
+
+exports.unhideComment = async (req, res) => {
+  const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
+  if (!blog) return res.status(404).json({ error: 'Blog not found' });
+
+  const target = findCommentById(blog, req.params.commentId);
+  if (!target) return res.status(404).json({ error: 'Comment not found' });
+
+  const comment = target.comment;
+  comment.isVisible = true;
+  await blog.save();
+
+  writeAuditLog({
+    req,
+    action: 'blog.comment_unhide',
+    targetModel: 'Blog',
+    targetId: blog._id,
+    targetLabel: blog.title,
+  });
+
+  res.json({ message: 'Comment unhidden successfully', comment });
 };
 
 exports.deleteComment = async (req, res) => {
@@ -281,6 +317,14 @@ exports.deleteComment = async (req, res) => {
   comment.isDeleted = true;
   comment.isVisible = false;
   await blog.save();
+
+  writeAuditLog({
+    req,
+    action: 'blog.comment_delete',
+    targetModel: 'Blog',
+    targetId: blog._id,
+    targetLabel: blog.title,
+  });
 
   res.json({ message: 'Comment deleted successfully' });
 };

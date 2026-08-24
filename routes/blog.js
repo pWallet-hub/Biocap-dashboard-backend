@@ -85,8 +85,74 @@ router.post('/public/:slug/comments', asyncHandler(blogController.addPublicComme
 
 router.get('/public/:slug/comments', asyncHandler(blogController.getPublicBlogBySlug));
 
+// ─── Comment Moderation Routes ────────────────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/blogs/{id}/comments/{commentId}/hide:
+ *   patch:
+ *     summary: Hide a comment from public view (Reviewers only)
+ *     tags: [Blogs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *       - in: path
+ *         name: commentId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Comment hidden }
+ */
 router.patch('/:id/comments/:commentId/hide', protect, authorize(...REVIEWERS), asyncHandler(blogController.hideComment));
+
+/**
+ * @swagger
+ * /api/blogs/{id}/comments/{commentId}/unhide:
+ *   patch:
+ *     summary: Restore a hidden comment back to public view (Reviewers only)
+ *     tags: [Blogs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *       - in: path
+ *         name: commentId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Comment restored to visible }
+ */
+router.patch('/:id/comments/:commentId/unhide', protect, authorize(...REVIEWERS), asyncHandler(blogController.unhideComment));
+
+/**
+ * @swagger
+ * /api/blogs/{id}/comments/{commentId}:
+ *   delete:
+ *     summary: Soft-delete a comment (Reviewers only)
+ *     tags: [Blogs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *       - in: path
+ *         name: commentId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Comment soft-deleted }
+ */
 router.delete('/:id/comments/:commentId', protect, authorize(...REVIEWERS), asyncHandler(blogController.deleteComment));
+
 router.patch('/:id/consent', protect, asyncHandler(blogController.respondToEditorConsent));
 
 // ─── Authenticated list / stats ────────────────────────────────────────────────
