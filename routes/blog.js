@@ -59,6 +59,9 @@ router.get('/public', asyncHandler(blogController.getPublicBlogs));
  */
 router.get('/public/:slug', asyncHandler(blogController.getPublicBlogBySlug));
 
+// Explicit route alias matching frontend /api/blogs/public/slug/:slug calls
+router.get('/public/slug/:slug', asyncHandler(blogController.getPublicBlogBySlug));
+
 /**
  * @swagger
  * /api/blogs/public/{slug}/comments:
@@ -83,7 +86,8 @@ router.get('/public/:slug', asyncHandler(blogController.getPublicBlogBySlug));
  */
 router.post('/public/:slug/comments', asyncHandler(blogController.addPublicComment));
 
-router.get('/public/:slug/comments', asyncHandler(blogController.getPublicBlogBySlug));
+// Corrected GET public comments endpoint
+router.get('/public/:slug/comments', asyncHandler(blogController.getPublicComments || blogController.getPublicBlogBySlug));
 
 // ─── Comment Moderation Routes ────────────────────────────────────────────────
 

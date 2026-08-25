@@ -139,13 +139,14 @@ exports.getPublicBlogs = async (req, res) => {
       .sort({ publishedAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('originalAuthor', 'firstName lastName username socialHandle organizationLink'),
+      .populate('originalAuthor', 'firstName lastName username socialHandle organizationLink organization')
+      .populate('author', 'firstName lastName username socialHandle organizationLink organization'),
     Blog.countDocuments(filter),
   ]);
 
   const formatted = blogs.map((b) => {
-    const creator = b.originalAuthor;
-    const authorName = creator ? `${creator.firstName} ${creator.lastName}` : 'Anonymous';
+    const creator = b.originalAuthor || b.author;
+    const authorName = creator ? `${creator.firstName} ${creator.lastName}`.trim() : 'Anonymous';
     const publishedDate = b.publishedAt ? b.publishedAt.toLocaleDateString('en-GB') : '';
 
     return {
@@ -162,7 +163,9 @@ exports.getPublicBlogs = async (req, res) => {
       documentName: b.documentName || null,
       originalAuthor: creator,
       publishedWith: `${authorName} on ${publishedDate}`,
-      link: b.originalAuthorRole === ROLES.BROADCAST_CONTENT_CREATOR ? b.organizationLink : b.socialHandle,
+      link: b.originalAuthorRole === ROLES.BROADCAST_CONTENT_CREATOR 
+        ? (b.organizationLink || creator?.organizationLink) 
+        : (b.socialHandle || creator?.socialHandle),
       publishedAt: b.publishedAt,
     };
   });
@@ -181,6 +184,7 @@ exports.getPublicBlogBySlug = async (req, res) => {
     { new: true }
   )
     .populate('originalAuthor', 'firstName lastName username socialHandle organization organizationLink')
+    .populate('author', 'firstName lastName username socialHandle organization organizationLink')
     .populate('comments.user', 'firstName lastName username email role')
     .populate('comments.replies.user', 'firstName lastName username email role');
 
@@ -188,7 +192,7 @@ exports.getPublicBlogBySlug = async (req, res) => {
 
   const blogObj = blog.toObject();
 
-  if (blogObj.author && blogObj.originalAuthor && blogObj.author.toString() !== blogObj.originalAuthor._id.toString()) {
+  if (blogObj.author && blogObj.originalAuthor && blogObj.author._id.toString() !== blogObj.originalAuthor._id.toString()) {
     delete blogObj.author;
   }
 
@@ -394,8 +398,8 @@ exports.getBlogs = async (req, res) => {
       .sort({ updatedAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('originalAuthor', 'username email role firstName lastName')
-      .populate('author', 'username email role firstName lastName')
+      .populate('originalAuthor', 'username email role firstName lastName socialHandle organization organizationLink')
+      .populate('author', 'username email role firstName lastName socialHandle organization organizationLink')
       .populate('publishedBy', 'username firstName lastName')
       .populate('reviewHistory.reviewer', 'username firstName lastName')
       .populate('changeRequests.commenter', 'username firstName lastName role'),

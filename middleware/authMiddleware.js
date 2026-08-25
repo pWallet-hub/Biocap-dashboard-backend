@@ -2,7 +2,7 @@ const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { REVIEWERS, PUBLISHERS, USER_MANAGERS, ROLE_MANAGERS, CREATORS, ROLES } = require('../constants/roles');
 
-// Core auth: requires a valid, non-expired token
+// Strict protection: requires a valid token
 const protect = async (req, res, next) => {
   let token;
 
@@ -29,7 +29,30 @@ const protect = async (req, res, next) => {
   }
 };
 
-// Generic role gate
+// Optional protection: attaches user if token is present, but allows guests through if not
+const optionalProtect = async (req, res, next) => {
+  let token;
+
+  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+    token = req.headers.authorization.split(' ')[1];
+  }
+
+  if (!token) {
+    return next(); // Proceed as guest
+  }
+
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const user = await User.findById(decoded.id).select('isActive role username');
+    if (user && user.isActive) {
+      req.user = { id: decoded.id, username: decoded.username, role: user.role };
+    }
+  } catch (error) {
+    // Ignore invalid tokens for public endpoints
+  }
+  next();
+};
+
 const authorize = (...allowedRoles) => (req, res, next) => {
   if (!req.user || !allowedRoles.includes(req.user.role)) {
     return res.status(403).json({ message: 'Access denied. Insufficient role permissions.' });
@@ -37,7 +60,6 @@ const authorize = (...allowedRoles) => (req, res, next) => {
   next();
 };
 
-// Named convenience wrappers matching the new permission matrix
 const adminOnly = authorize(ROLES.ADMIN);
 const reviewerOnly = authorize(...REVIEWERS);
 const publisherOnly = authorize(...PUBLISHERS);
@@ -56,6 +78,7 @@ const authenticatedOnly = (req, res, next) => {
 
 module.exports = {
   protect,
+  optionalProtect, // Exported for public routes
   authorize,
   adminOnly,
   reviewerOnly,
