@@ -139,8 +139,8 @@ exports.getPublicBlogs = async (req, res) => {
       .sort({ publishedAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('originalAuthor', 'firstName lastName username socialHandle organizationLink organization')
-      .populate('author', 'firstName lastName username socialHandle organizationLink organization'),
+      .populate('originalAuthor', 'firstName lastName username jobTitle socialHandle organizationLink organization')
+      .populate('author', 'firstName lastName username jobTitle socialHandle organizationLink organization'),
     Blog.countDocuments(filter),
   ]);
 
@@ -183,10 +183,10 @@ exports.getPublicBlogBySlug = async (req, res) => {
     { $inc: { views: 1 } },
     { new: true }
   )
-    .populate('originalAuthor', 'firstName lastName username socialHandle organization organizationLink')
-    .populate('author', 'firstName lastName username socialHandle organization organizationLink')
-    .populate('comments.user', 'firstName lastName username email role')
-    .populate('comments.replies.user', 'firstName lastName username email role');
+    .populate('originalAuthor', 'firstName lastName username jobTitle socialHandle organization organizationLink')
+    .populate('author', 'firstName lastName username jobTitle socialHandle organization organizationLink')
+    .populate('comments.user', 'firstName lastName username email role jobTitle')
+    .populate('comments.replies.user', 'firstName lastName username email role jobTitle');
 
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
 
@@ -337,8 +337,8 @@ exports.respondToEditorConsent = async (req, res) => {
   const { approved, note } = req.body || {};
 
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false })
-    .populate('originalAuthor', 'firstName lastName email username')
-    .populate('author', 'firstName lastName email username');
+    .populate('originalAuthor', 'firstName lastName email username jobTitle')
+    .populate('author', 'firstName lastName email username jobTitle');
 
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
 
@@ -398,11 +398,11 @@ exports.getBlogs = async (req, res) => {
       .sort({ updatedAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('originalAuthor', 'username email role firstName lastName socialHandle organization organizationLink')
-      .populate('author', 'username email role firstName lastName socialHandle organization organizationLink')
-      .populate('publishedBy', 'username firstName lastName')
-      .populate('reviewHistory.reviewer', 'username firstName lastName')
-      .populate('changeRequests.commenter', 'username firstName lastName role'),
+      .populate('originalAuthor', 'username email role firstName lastName jobTitle socialHandle organization organizationLink')
+      .populate('author', 'username email role firstName lastName jobTitle socialHandle organization organizationLink')
+      .populate('publishedBy', 'username firstName lastName jobTitle')
+      .populate('reviewHistory.reviewer', 'username firstName lastName jobTitle')
+      .populate('changeRequests.commenter', 'username firstName lastName role jobTitle'),
     Blog.countDocuments(filter),
   ]);
 
@@ -439,11 +439,11 @@ exports.getMySubmissions = async (req, res) => {
  */
 exports.getBlogById = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false })
-    .populate('originalAuthor', 'username email role firstName lastName socialHandle organization organizationLink')
-    .populate('author', 'username email role firstName lastName socialHandle organization organizationLink')
-    .populate('publishedBy', 'username firstName lastName')
-    .populate('reviewHistory.reviewer', 'username firstName lastName role')
-    .populate('changeRequests.commenter', 'username firstName lastName role');
+    .populate('originalAuthor', 'username email role firstName lastName jobTitle socialHandle organization organizationLink')
+    .populate('author', 'username email role firstName lastName jobTitle socialHandle organization organizationLink')
+    .populate('publishedBy', 'username firstName lastName jobTitle')
+    .populate('reviewHistory.reviewer', 'username firstName lastName role jobTitle')
+    .populate('changeRequests.commenter', 'username firstName lastName role jobTitle');
 
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
 
@@ -516,7 +516,7 @@ exports.createBlog = async (req, res) => {
     return res.status(400).json({ error: 'title, tag, and at least one of excerpt/excerptBlocks/blocks is required' });
   }
 
-  const author = await User.findById(req.user.id).select('socialHandle organizationLink role');
+  const author = await User.findById(req.user.id).select('socialHandle organizationLink role jobTitle');
   const slug = await generateSlug(title);
 
   const imgPublicId = imgFile.filename || imgFile.public_id || '';
@@ -762,8 +762,8 @@ exports.getDeletedBlogs = async (req, res) => {
       .sort({ deletedAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('originalAuthor', 'username firstName lastName')
-      .populate('deletedBy', 'username firstName lastName'),
+      .populate('originalAuthor', 'username firstName lastName jobTitle')
+      .populate('deletedBy', 'username firstName lastName jobTitle'),
     Blog.countDocuments({ isDeleted: true }),
   ]);
 
@@ -818,7 +818,7 @@ exports.reviewBlog = async (req, res) => {
 
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false }).populate(
     'originalAuthor',
-    'email firstName'
+    'email firstName jobTitle'
   );
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
   if (blog.status !== 'pending_review') {
@@ -904,7 +904,7 @@ exports.reviewBlog = async (req, res) => {
 exports.publishBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false }).populate(
     'originalAuthor',
-    'email firstName'
+    'email firstName jobTitle'
   );
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
   if (blog.status !== 'approved') {

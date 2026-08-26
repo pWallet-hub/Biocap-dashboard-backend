@@ -535,10 +535,48 @@ router.put('/me', protect, async (req, res) => {
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    const updates = pickProfileFields(req.body);
+    const updates = typeof pickProfileFields === 'function' ? pickProfileFields(req.body) : {};
     Object.assign(user, updates);
 
-    validateRoleSpecificFields(user.role, { organizationLink: user.organizationLink });
+    // Explicitly handle jobTitle, organizationLink, socialHandle, and dateOfBirth updates
+    const {
+      firstName,
+      lastName,
+      jobTitle,
+      job_title,
+      title,
+      organizationLink,
+      organization_link,
+      socialHandle,
+      social_handle,
+      dateOfBirth,
+    } = req.body;
+
+    if (firstName !== undefined) user.firstName = firstName.toString().trim();
+    if (lastName !== undefined) user.lastName = lastName.toString().trim();
+
+    const activeJobTitle = jobTitle || job_title || title;
+    if (activeJobTitle !== undefined) {
+      user.jobTitle = activeJobTitle.toString().trim();
+    }
+
+    const activeOrgLink = organizationLink || organization_link;
+    if (activeOrgLink !== undefined) {
+      user.organizationLink = activeOrgLink.toString().trim();
+    }
+
+    const activeSocialHandle = socialHandle || social_handle;
+    if (activeSocialHandle !== undefined) {
+      user.socialHandle = activeSocialHandle.toString().trim();
+    }
+
+    if (dateOfBirth !== undefined) {
+      user.dateOfBirth = dateOfBirth;
+    }
+
+    if (typeof validateRoleSpecificFields === 'function') {
+      validateRoleSpecificFields(user.role, { organizationLink: user.organizationLink });
+    }
 
     await user.save({ validateModifiedOnly: true });
 

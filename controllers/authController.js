@@ -262,3 +262,71 @@ exports.getMe = async (req, res) => {
     return res.status(500).json({ error: 'Failed to retrieve profile.' });
   }
 };
+
+/**
+ * PUT /api/auth/me or PUT /api/auth/profile
+ * Allows authenticated users to update their profile details.
+ */
+exports.updateProfile = async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?._id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized user session.' });
+    }
+
+    const {
+      firstName,
+      lastName,
+      jobTitle,
+      job_title,
+      title,
+      organizationLink,
+      organization_link,
+      socialHandle,
+      social_handle,
+      dateOfBirth,
+    } = req.body;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User profile not found.' });
+    }
+
+    if (firstName !== undefined) user.firstName = firstName.toString().trim();
+    if (lastName !== undefined) user.lastName = lastName.toString().trim();
+
+    // Extract job title from payload variants
+    const activeJobTitle = jobTitle || job_title || title;
+    if (activeJobTitle !== undefined) {
+      user.jobTitle = activeJobTitle.toString().trim();
+    }
+
+    const activeOrgLink = organizationLink || organization_link;
+    if (activeOrgLink !== undefined) {
+      user.organizationLink = activeOrgLink.toString().trim();
+    }
+
+    const activeSocialHandle = socialHandle || social_handle;
+    if (activeSocialHandle !== undefined) {
+      user.socialHandle = activeSocialHandle.toString().trim();
+    }
+
+    if (dateOfBirth !== undefined) {
+      user.dateOfBirth = dateOfBirth;
+    }
+
+    await user.save({ validateModifiedOnly: true });
+
+    const userObj = user.toObject();
+    delete userObj.password;
+    delete userObj.refreshToken;
+
+    return res.status(200).json({
+      message: 'Profile updated successfully',
+      user: userObj,
+    });
+  } catch (err) {
+    console.error('Update Profile Error:', err);
+    return res.status(500).json({ error: err.message || 'Server error updating profile.' });
+  }
+};
