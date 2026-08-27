@@ -136,24 +136,29 @@ UserSchema.pre('validate', function () {
     this.organization = normalizeOrganization(this.organization);
   }
 
+  // 2. Bypass strict registration validations when updating existing user documents
+  if (!this.isNew) {
+    return;
+  }
+
   const targetMediaRole = ROLES?.MEDIA_CORRESPONDENT || 'media_correspondent';
   const legacyMediaRole = ROLES?.BROADCAST_CONTENT_CREATOR || 'broadcast_content_creator';
   const isAdmin = this.role === 'admin';
 
-  // 2. Admins do not require organization links or job titles
+  // 3. Admins do not require organization links or job titles
   if (isAdmin) {
     return;
   }
 
-  // 3. Validate organizationLink requirement for Media Correspondents
+  // 4. Validate organizationLink requirement for Media Correspondents during new registrations
   if ((this.role === targetMediaRole || this.role === legacyMediaRole) && !this.organizationLink) {
     throw new Error('organizationLink is required for Media Correspondent accounts');
   }
 
-  // 4. Require jobTitle ONLY during NEW user registration (this.isNew)
+  // 5. Require jobTitle ONLY during NEW user registration
   const isAfSRwanda = this.organization === 'Alliance for Science Rwanda (AfS-Rwanda)';
 
-  if (this.isNew && !isAfSRwanda && (!this.jobTitle || !this.jobTitle.trim())) {
+  if (!isAfSRwanda && (!this.jobTitle || !this.jobTitle.trim())) {
     throw new Error('Job Title is required for author bylines');
   }
 });

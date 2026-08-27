@@ -61,27 +61,6 @@ function normalizeOrganizationName(org) {
  */
 
 // ─── Register (Public Direct Registration) ─────────────────────────────────────
-/**
- * @swagger
- * /api/auth/register:
- *   post:
- *     tags: [Authentication]
- *     summary: Create a new user account
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               username: { type: string }
- *               email: { type: string }
- *               password: { type: string }
- *               role: { type: string }
- *     responses:
- *       201: { description: Account created }
- *       400: { description: Validation error }
- */
 router.post('/register', authLimiter, async (req, res) => {
   try {
     const {
@@ -128,7 +107,6 @@ router.post('/register', authLimiter, async (req, res) => {
     const organization = normalizeOrganizationName(rawOrganization);
     const isAfSRwanda = organization === 'Alliance for Science Rwanda (AfS-Rwanda)';
 
-    // Extract jobTitle from any key alias, or assign fallbacks if missing
     let finalJobTitle = (jobTitle || job_title || title || '').toString().trim();
     if (!finalJobTitle) {
       finalJobTitle = isAfSRwanda ? 'AfS Representative' : 'Contributor';
@@ -184,25 +162,6 @@ router.post('/register', authLimiter, async (req, res) => {
 });
 
 // ─── Login ─────────────────────────────────────────────────────────────────────
-/**
- * @swagger
- * /api/auth/login:
- *   post:
- *     tags: [Authentication]
- *     summary: Authenticate and obtain access/refresh tokens
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               email: { type: string }
- *               password: { type: string }
- *     responses:
- *       200: { description: Returns accessToken and refreshToken }
- *       401: { description: Invalid credentials }
- */
 router.post('/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -212,7 +171,6 @@ router.post('/login', authLimiter, async (req, res) => {
 
     const inputIdentifier = email.trim();
 
-    // 1. Find user by email OR username (case-insensitive)
     const user = await User.findOne({
       $or: [
         { email: inputIdentifier.toLowerCase() },
@@ -240,7 +198,6 @@ router.post('/login', authLimiter, async (req, res) => {
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(401).json({ message: 'Invalid credentials' });
 
-    // 2. Auto-normalize legacy organization strings stored in DB before saving
     if (user.organization) {
       user.organization = normalizeOrganizationName(user.organization);
     }
@@ -252,7 +209,7 @@ router.post('/login', authLimiter, async (req, res) => {
     user.lastLoginAt = new Date();
     user.loginCount = (user.loginCount || 0) + 1;
 
-    // 3. Save strictly modified fields so validation won't fail on legacy profiles
+    // Save strictly modified login fields without schema validation failures
     await user.save({ validateModifiedOnly: true });
 
     writeAuditLog({
@@ -278,25 +235,6 @@ router.post('/login', authLimiter, async (req, res) => {
 });
 
 // ─── Refresh Token ─────────────────────────────────────────────────────────────
-/**
- * @swagger
- * /api/auth/refresh:
- *   post:
- *     tags: [Authentication]
- *     summary: Exchange refresh token for a new access token
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               refreshToken: { type: string }
- *               userId: { type: string }
- *     responses:
- *       200: { description: New accessToken }
- *       401: { description: Invalid or expired refresh token }
- */
 router.post('/refresh', async (req, res) => {
   try {
     const { refreshToken, userId } = req.body;
@@ -322,17 +260,6 @@ router.post('/refresh', async (req, res) => {
 });
 
 // ─── Logout ────────────────────────────────────────────────────────────────────
-/**
- * @swagger
- * /api/auth/logout:
- *   post:
- *     tags: [Authentication]
- *     summary: Logout current user and invalidate refresh token
- *     security:
- *       - bearerAuth: []
- *     responses:
- *       200: { description: Logged out }
- */
 router.post('/logout', protect, async (req, res) => {
   try {
     await User.findByIdAndUpdate(req.user.id, { refreshToken: null });
@@ -352,23 +279,6 @@ router.post('/logout', protect, async (req, res) => {
 });
 
 // ─── Forgot Password ───────────────────────────────────────────────────────────
-/**
- * @swagger
- * /api/auth/forgot-password:
- *   post:
- *     tags: [Authentication]
- *     summary: Send a password reset link to the user's email
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               email: { type: string }
- *     responses:
- *       200: { description: Reset email (if account exists) }
- */
 router.post('/forgot-password', authLimiter, async (req, res) => {
   try {
     const { email } = req.body;
@@ -402,24 +312,6 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
 });
 
 // ─── Reset Password ────────────────────────────────────────────────────────────
-/**
- * @swagger
- * /api/auth/reset-password:
- *   post:
- *     tags: [Authentication]
- *     summary: Reset password using token sent via email
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               token: { type: string }
- *               newPassword: { type: string }
- *     responses:
- *       200: { description: Password reset successful }
- */
 router.post('/reset-password', authLimiter, async (req, res) => {
   try {
     const { token, new_password, newPassword } = req.body;
@@ -456,49 +348,34 @@ router.post('/reset-password', authLimiter, async (req, res) => {
 });
 
 // ─── Change Password ──────────────────────────────────────────────────────────
-/**
- * @swagger
- * /api/auth/change-password:
- *   post:
- *     tags: [Authentication]
- *     summary: Change current user's password
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               currentPassword: { type: string }
- *               newPassword: { type: string }
- *     responses:
- *       200: { description: Password changed }
- */
 router.post('/change-password', protect, async (req, res) => {
   try {
-    const { currentPassword, newPassword } = req.body;
+    const { currentPassword, oldPassword, current_password, newPassword, new_password } = req.body;
 
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ message: 'currentPassword and newPassword are required' });
+    const actualCurrent = currentPassword || oldPassword || current_password;
+    const actualNew = newPassword || new_password;
+
+    if (!actualCurrent || !actualNew) {
+      return res.status(400).json({ message: 'Current password and new password are required.' });
     }
-    if (newPassword.length < 8) {
+    if (actualNew.length < 8) {
       return res.status(400).json({ message: 'New password must be at least 8 characters.' });
     }
 
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
 
-    const isMatch = await bcrypt.compare(currentPassword, user.password);
+    const isMatch = await bcrypt.compare(actualCurrent, user.password);
     if (!isMatch) {
       return res.status(400).json({ message: 'Current password is incorrect.' });
     }
 
     const salt = await bcrypt.genSalt(10);
-    user.password = await bcrypt.hash(newPassword, salt);
+    user.password = await bcrypt.hash(actualNew, salt);
     user.isPasswordResetRequired = false;
     user.refreshToken = null;
+
+    // Save password change without triggering unrelated validation checks
     await user.save({ validateModifiedOnly: true });
 
     sendPasswordChangedEmail(user.email, user.firstName).catch((err) =>
@@ -538,7 +415,6 @@ router.put('/me', protect, async (req, res) => {
     const updates = typeof pickProfileFields === 'function' ? pickProfileFields(req.body) : {};
     Object.assign(user, updates);
 
-    // Explicitly handle jobTitle, organizationLink, socialHandle, and dateOfBirth updates
     const {
       firstName,
       lastName,
