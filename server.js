@@ -16,6 +16,9 @@ dotenv.config();
 // Connect to Biocap Database
 connectDB();
 
+// 🟢 Initialize background event bus listener for non-blocking publishing side-effects
+require('./services/blogEventListener');
+
 const app = express();
 
 // --- Security & Core Middlewares ---
@@ -49,9 +52,9 @@ app.use(
   })
 );
 
-// Body Parsers
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Expanded Body Parsers for Large Article Payloads (50MB)
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Express 5 Compatibility: Make req.query writable so express-mongo-sanitize doesn't throw getter error
 app.use((req, res, next) => {
@@ -107,6 +110,7 @@ const swaggerOptions = {
     path.resolve(__dirname, 'routes', 'officer.js'),
     path.resolve(__dirname, 'routes', 'admin.js'),
     path.resolve(__dirname, 'routes', 'upload.js'),
+    path.resolve(__dirname, 'routes', 'signature.js'),
   ],
 };
 
@@ -118,6 +122,9 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
 // --- Route Declarations & Role-Based Mount Aliases ---
 app.use('/api/upload', uploadRoutes);
 
+// Mount standalone signature route for direct browser uploads to Cloudinary
+app.use('/api/upload/signature', require('./routes/signature'));
+
 // Main blog routes module
 const blogRouter = require('./routes/blog');
 
@@ -127,7 +134,7 @@ app.use('/api/blogs', blogRouter);
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/officer', require('./routes/officer'));
 
-// 🟢 ALIAS MOUNTS: Prevents 404s when Editor or Contributors hit role-prefixed URLs
+// ALIAS MOUNTS: Prevents 404s when Editor or Contributors hit role-prefixed URLs
 app.use('/api/editor/blogs', blogRouter);
 app.use('/api/editor', require('./routes/editor'));
 

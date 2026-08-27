@@ -1,5 +1,5 @@
-// Parses multipart-form "modal" and "blocks" fields (which arrive as JSON strings) into objects,
-// and attaches fields to req.parsedBody so controllers stay clean.
+// Parses multipart-form and JSON body fields into structured objects,
+// attaching all fields (including Cloudinary image URLs) to req.parsedBody.
 const parseBlogBody = (req, res, next) => {
   try {
     const body = req.body || {};
@@ -8,6 +8,15 @@ const parseBlogBody = (req, res, next) => {
     const excerpt = typeof body.excerpt === 'string' ? body.excerpt.trim() : '';
     const socialHandle = typeof body.socialHandle === 'string' ? body.socialHandle.trim() : '';
     const organizationLink = typeof body.organizationLink === 'string' ? body.organizationLink.trim() : '';
+
+    // 🟢 PASS IMAGE URL & PUBLIC ID FROM DIRECT CLOUDINARY UPLOADS
+    const img = typeof body.img === 'string' ? body.img.trim() : '';
+    const imgPublicId = typeof body.imgPublicId === 'string' ? body.imgPublicId.trim() : '';
+
+    // Pass optional document attachment fields
+    const documentUrl = typeof body.documentUrl === 'string' ? body.documentUrl.trim() : '';
+    const documentPublicId = typeof body.documentPublicId === 'string' ? body.documentPublicId.trim() : '';
+    const documentName = typeof body.documentName === 'string' ? body.documentName.trim() : '';
 
     let modal = {};
     if (body.modal) {
@@ -40,6 +49,11 @@ const parseBlogBody = (req, res, next) => {
       title,
       tag,
       excerpt,
+      img, // 🟢 NOW INCLUDED IN PARSED BODY
+      imgPublicId,
+      documentUrl,
+      documentPublicId,
+      documentName,
       socialHandle,
       organizationLink,
       modal: modal || {},

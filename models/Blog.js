@@ -1,11 +1,12 @@
 const mongoose = require('mongoose');
 const { ROLES, ALL_ROLES, REVIEWERS } = require('../constants/roles');
 
+// ─── Flexible Section Block Schema ──────────────────────────────────────────
 const BlockSchema = new mongoose.Schema(
   {
     type: {
       type: String,
-      enum: ['hero','h1', 'h2', 'p', 'quote', 'emphasis', 'image', 'list', 'html', 'embed'],
+      enum: ['hero', 'h1', 'h2', 'p', 'quote', 'emphasis', 'image', 'list', 'html', 'embed'],
       required: true,
     },
     text: { type: String, trim: true },
@@ -14,21 +15,23 @@ const BlockSchema = new mongoose.Schema(
     caption: { type: String, trim: true },
     // Optional list items for 'list' blocks
     items: { type: [String], default: undefined },
-    // Background image or hero image
+    // Background image or hero image URL
     background: { type: String, trim: true },
   },
-  { _id: false }
+  { _id: false, strict: false } // Allows dynamic or custom block attributes without throwing schema errors
 );
 
+// ─── Article Sidebar Metadata Schema ─────────────────────────────────────────
 const ModalSchema = new mongoose.Schema(
   {
     date: { type: String, trim: true },
     organizer: { type: String, trim: true },
     partners: { type: String, trim: true },
   },
-  { _id: false }
+  { _id: false, strict: false }
 );
 
+// ─── Editorial Review Audit Log Schema ───────────────────────────────────────
 const ReviewLogSchema = new mongoose.Schema(
   {
     decision: { type: String, enum: ['approved', 'rejected'], required: true },
@@ -39,6 +42,7 @@ const ReviewLogSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// ─── Revision / Change Request Schema ───────────────────────────────────────
 const ChangeRequestSchema = new mongoose.Schema(
   {
     commenter: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
@@ -98,24 +102,28 @@ const EditorModificationSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// ─── Main Blog Post Schema ───────────────────────────────────────────────────
 const BlogSchema = new mongoose.Schema(
   {
     title: { type: String, required: true, trim: true },
     slug: { type: String, unique: true, lowercase: true, trim: true },
     tag: { type: String, required: true, trim: true },
-    // Excerpt can be simple text or a structured block array (for embedded images)
+    
+    // Excerpt text & optional structured blocks
     excerpt: { type: String, trim: true },
     excerptBlocks: { type: [BlockSchema], default: [] },
 
-    // Core content structured as flexible blocks (multiple sections)
+    // Core article content structured as flexible blocks
     blocks: { type: [BlockSchema], default: [] },
 
     // Sidebar metadata
     modal: { type: ModalSchema, default: {} },
 
+    // Cover image & Cloudinary public identifier
     img: { type: String, required: true },
     imgPublicId: { type: String, required: true },
 
+    // Optional supporting PDF document
     documentUrl: { type: String },
     documentPublicId: { type: String },
     documentName: { type: String },
@@ -124,7 +132,7 @@ const BlogSchema = new mongoose.Schema(
     originalAuthor: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     originalAuthorRole: { type: String, required: true },
 
-    // Last editor / responsible account for internal tracking
+    // Responsible author/editor for internal tracking
     author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
     authorRole: {
       type: String,
@@ -150,21 +158,20 @@ const BlogSchema = new mongoose.Schema(
     submittedAt: { type: Date },
     lastRejectionNote: { type: String },
     reviewHistory: { type: [ReviewLogSchema], default: [] },
-    // Change requests created by reviewers (editor/admin/officer)
     changeRequests: { type: [ChangeRequestSchema], default: [] },
 
     publishedAt: { type: Date },
     publishedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 
-    // ─── Officer Review & Editor Change Tracking ──────────────────────────────
+    // Officer Review & Editor Change Tracking
     editorModifications: { type: EditorModificationSchema },
     officerAcceptedChanges: { type: Boolean, default: false },
     officerApprovalNote: { type: String, trim: true },
 
-    // ─── Comments on Published Articles ──────────────────────────────────────
+    // Comments on Published Articles
     comments: { type: [CommentSchema], default: [] },
 
-    // Writer consent before a reviewer/editor-published article may go live
+    // Writer consent before a reviewer/editor-published article goes live
     publishConsentStatus: {
       type: String,
       enum: ['not_required', 'pending', 'approved', 'rejected'],
@@ -174,12 +181,12 @@ const BlogSchema = new mongoose.Schema(
     publishConsentNote: { type: String, trim: true },
     publishConsentBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 
-    // Soft delete — admin can restore or permanently remove
+    // Soft delete tracking
     isDeleted: { type: Boolean, default: false },
     deletedAt: { type: Date },
     deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 
-    // Public engagement metric
+    // Public engagement metrics
     views: { type: Number, default: 0, min: 0 },
   },
   { timestamps: true }
@@ -231,6 +238,8 @@ BlogSchema.methods.canOwnerModify = function () {
  * Owner: only their own draft.
  */
 BlogSchema.methods.canBeEditedBy = function (user) {
+  if (!user) return false;
+
   const adminRole = ROLES?.ADMIN || 'admin';
   if (user.role === adminRole) return true;
 
@@ -254,6 +263,8 @@ BlogSchema.methods.canBeEditedBy = function (user) {
  * Published blogs are admin-only to delete.
  */
 BlogSchema.methods.canBeDeletedBy = function (user) {
+  if (!user) return false;
+
   const adminRole = ROLES?.ADMIN || 'admin';
   if (this.status === 'published') return user.role === adminRole;
 

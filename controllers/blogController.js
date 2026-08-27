@@ -2,6 +2,7 @@ const Blog = require('../models/Blog');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
 const cloudinary = require('../config/cloudinary');
+const blogEventBus = require('../config/eventBus');
 const { REVIEWERS, CREATORS, isReviewer, ROLES } = require('../constants/roles');
 const { parsePagination, paginatedResponse } = require('../utils/pagination');
 const { generateSlug } = require('../utils/slugify');
@@ -13,11 +14,18 @@ const {
 } = require('../utils/sendEmail');
 const { htmlToBlocks } = require('../utils/htmlToBlocks');
 
+// 🟢 High-Speed In-Memory Cache for Public News List
+let publicBlogsCache = null;
+let lastPublicCacheTime = 0;
+const PUBLIC_CACHE_TTL = 60 * 1000; // 60-second cache TTL
+
+const invalidatePublicBlogsCache = () => {
+  publicBlogsCache = null;
+  lastPublicCacheTime = 0;
+};
+
 /**
  * Map uploaded files (req.files.images) into blocks or excerptBlocks.
- * Strategies used:
- * 1. Exact match by originalname vs fileKey / uploadKey / src / source
- * 2. Fallback by position (sequential index matching) if exact key matching fails
  */
 const applyUploadedImagesToBlocks = (blocks = [], uploadedFiles = []) => {
   if (!Array.isArray(blocks) || blocks.length === 0) return blocks;
@@ -37,14 +45,12 @@ const applyUploadedImagesToBlocks = (blocks = [], uploadedFiles = []) => {
       const fileKey = blk.fileKey || blk.uploadKey || blk.src || blk.source;
       let matched = null;
 
-      // 1. Try matching by explicit originalname key
       if (fileKey && byOriginalName.has(fileKey)) {
         matched = byOriginalName.get(fileKey);
       } else if (blk.src && byOriginalName.has(blk.src)) {
         matched = byOriginalName.get(blk.src);
       }
 
-      // 2. Sequential fallback if key lookup missed
       if (!matched && uploadedFiles[fileIndex]) {
         matched = uploadedFiles[fileIndex];
       }
@@ -64,9 +70,9 @@ const applyUploadedImagesToBlocks = (blocks = [], uploadedFiles = []) => {
 
 // ─── Private Helpers ──────────────────────────────────────────────────────────
 
-const destroyAsset = async (publicId, resourceType = 'image') => {
+const destroyAsset = (publicId, resourceType = 'image') => {
   if (!publicId) return;
-  await cloudinary.uploader
+  cloudinary.uploader
     .destroy(publicId, { resource_type: resourceType })
     .catch((err) => console.error(`Failed to remove Cloudinary asset (${resourceType}):`, err.message));
 };
@@ -75,7 +81,6 @@ const buildBlogFilter = (query, user) => {
   const filter = { isDeleted: false };
 
   if (!isReviewer(user.role)) {
-    // External creators only see their own blogs
     filter.$or = [{ originalAuthor: user.id }, { author: user.id }];
   }
 
@@ -89,24 +94,6 @@ const buildBlogFilter = (query, user) => {
   return filter;
 };
 
-const summarizeChanges = (before, after) => {
-  const items = [];
-
-  if (before.title !== after.title) items.push(`title changed from "${before.title}" to "${after.title}"`);
-  if (before.excerpt !== after.excerpt) items.push('excerpt updated');
-  if ((before.tag || '') !== (after.tag || '')) items.push(`tag changed from "${before.tag || ''}" to "${after.tag || ''}"`);
-  if (JSON.stringify(before.blocks || []) !== JSON.stringify(after.blocks || [])) items.push('body content updated');
-  if (JSON.stringify(before.excerptBlocks || []) !== JSON.stringify(after.excerptBlocks || [])) items.push('excerpt section updated');
-  if ((before.socialHandle || '') !== (after.socialHandle || '')) items.push('social handle updated');
-  if ((before.organizationLink || '') !== (after.organizationLink || '')) items.push('organization link updated');
-
-  return items.length ? items.join('; ') : 'content updated';
-};
-
-/**
- * Finds any comment or nested reply by ID regardless of visibility/deletion state.
- * Allows moderation endpoints (hide, unhide, soft-delete) to locate hidden comments.
- */
 const findCommentById = (blog, commentId) => {
   if (!blog || !commentId) return null;
 
@@ -123,145 +110,171 @@ const findCommentById = (blog, commentId) => {
 
 // ─── Public Endpoints (No Auth) ───────────────────────────────────────────────
 
-/**
- * GET /api/blogs/public
- * Paginated list of published blogs for the public website.
- */
-exports.getPublicBlogs = async (req, res) => {
-  const { page, limit, skip } = parsePagination(req.query);
+exports.getPublicBlogs = async (req, res, next) => {
+  try {
+    const { page, limit, skip } = parsePagination(req.query);
+    const now = Date.now();
 
-  const filter = { status: 'published', isDeleted: false };
-  if (req.query.tag) filter.tag = { $regex: req.query.tag.trim(), $options: 'i' };
-  if (req.query.search?.trim()) filter.$text = { $search: req.query.search.trim() };
+    if (!req.query.tag && !req.query.search && page === 1 && publicBlogsCache && (now - lastPublicCacheTime < PUBLIC_CACHE_TTL)) {
+      res.setHeader('X-Cache', 'HIT');
+      return res.json(publicBlogsCache);
+    }
 
-  const [blogs, total] = await Promise.all([
-    Blog.find(filter)
-      .sort({ publishedAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .populate('originalAuthor', 'firstName lastName username jobTitle socialHandle organizationLink organization')
-      .populate('author', 'firstName lastName username jobTitle socialHandle organizationLink organization'),
-    Blog.countDocuments(filter),
-  ]);
+    const filter = { status: 'published', isDeleted: false };
+    if (req.query.tag) filter.tag = { $regex: req.query.tag.trim(), $options: 'i' };
+    if (req.query.search?.trim()) filter.$text = { $search: req.query.search.trim() };
 
-  const formatted = blogs.map((b) => {
-    const creator = b.originalAuthor || b.author;
-    const authorName = creator ? `${creator.firstName} ${creator.lastName}`.trim() : 'Anonymous';
-    const publishedDate = b.publishedAt ? b.publishedAt.toLocaleDateString('en-GB') : '';
+    const [blogs, total] = await Promise.all([
+      Blog.find(filter)
+        .select('title slug img tag excerpt views documentUrl documentName publishedAt originalAuthor author socialHandle organizationLink')
+        .sort({ publishedAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .populate('originalAuthor', 'firstName lastName username jobTitle socialHandle organizationLink organization')
+        .populate('author', 'firstName lastName username jobTitle socialHandle organizationLink organization')
+        .lean(),
+      Blog.countDocuments(filter),
+    ]);
 
-    return {
-      _id: b._id,
-      slug: b.slug,
-      title: b.title,
-      img: b.img,
-      tag: b.tag,
-      excerpt: b.excerpt,
-      blocks: b.blocks || [],
-      modal: b.modal || {},
-      views: b.views,
-      documentUrl: b.documentUrl || null,
-      documentName: b.documentName || null,
-      originalAuthor: creator,
-      publishedWith: `${authorName} on ${publishedDate}`,
-      link: b.originalAuthorRole === ROLES.BROADCAST_CONTENT_CREATOR 
-        ? (b.organizationLink || creator?.organizationLink) 
-        : (b.socialHandle || creator?.socialHandle),
-      publishedAt: b.publishedAt,
+    const formatted = blogs.map((b) => {
+      const creator = b.originalAuthor || b.author;
+      const authorName = creator ? `${creator.firstName || ''} ${creator.lastName || ''}`.trim() || creator.username : 'Contributor';
+      const publishedDate = b.publishedAt ? new Date(b.publishedAt).toLocaleDateString('en-GB') : '';
+
+      return {
+        _id: b._id,
+        slug: b.slug,
+        title: b.title,
+        img: b.img,
+        tag: b.tag,
+        excerpt: b.excerpt,
+        views: b.views,
+        documentUrl: b.documentUrl || null,
+        documentName: b.documentName || null,
+        originalAuthor: creator,
+        publishedWith: `${authorName} on ${publishedDate}`,
+        link: b.originalAuthorRole === ROLES.BROADCAST_CONTENT_CREATOR 
+          ? (b.organizationLink || creator?.organizationLink) 
+          : (b.socialHandle || creator?.socialHandle),
+        publishedAt: b.publishedAt,
+      };
+    });
+
+    const responsePayload = paginatedResponse(formatted, total, { page, limit });
+
+    if (!req.query.tag && !req.query.search && page === 1) {
+      publicBlogsCache = responsePayload;
+      lastPublicCacheTime = now;
+    }
+
+    res.setHeader('X-Cache', 'MISS');
+    res.json(responsePayload);
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getPublicBlogBySlug = async (req, res, next) => {
+  try {
+    const blog = await Blog.findOneAndUpdate(
+      { slug: req.params.slug, status: 'published', isDeleted: false },
+      { $inc: { views: 1 } },
+      { new: true }
+    )
+      .populate('originalAuthor', 'firstName lastName username jobTitle socialHandle organization organizationLink')
+      .populate('author', 'firstName lastName username jobTitle socialHandle organization organizationLink')
+      .populate('comments.user', 'firstName lastName username email role jobTitle')
+      .populate('comments.replies.user', 'firstName lastName username email role jobTitle')
+      .lean();
+
+    if (!blog) return res.status(404).json({ error: 'Blog not found' });
+
+    if (blog.author && blog.originalAuthor && blog.author._id.toString() !== blog.originalAuthor._id.toString()) {
+      delete blog.author;
+    }
+
+    blog.comments = (blog.comments || [])
+      .filter((comment) => comment && !comment.isDeleted && comment.isVisible !== false)
+      .map((comment) => ({
+        ...comment,
+        replies: (comment.replies || []).filter((reply) => !reply.isDeleted && reply.isVisible !== false),
+      }));
+
+    res.json(blog);
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.addPublicComment = async (req, res, next) => {
+  try {
+    const { slug } = req.params;
+    const { name, email, phone, content, parentComment } = req.body || {};
+
+    if (!name?.trim() || !email?.trim() || !content?.trim()) {
+      return res.status(400).json({ error: 'Name, email, and comment content are required.' });
+    }
+
+    const blog = await Blog.findOne({ slug, status: 'published', isDeleted: false });
+    if (!blog) return res.status(404).json({ error: 'Blog not found' });
+
+    const payload = {
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      phone: phone?.trim() || '',
+      role: req.user?.role || 'guest',
+      user: req.user?.id || null,
+      content: content.trim(),
+      parentComment: parentComment || null,
+      isVisible: true,
+      isDeleted: false,
+      replies: [],
+      createdAt: new Date(),
     };
-  });
 
-  res.json(paginatedResponse(formatted, total, { page, limit }));
-};
+    if (parentComment) {
+      const target = findCommentById(blog, parentComment);
+      if (!target) {
+        return res.status(404).json({ error: 'Parent comment not found' });
+      }
 
-/**
- * GET /api/blogs/public/:slug
- * Single published blog by URL slug — increments view counter.
- */
-exports.getPublicBlogBySlug = async (req, res) => {
-  const blog = await Blog.findOneAndUpdate(
-    { slug: req.params.slug, status: 'published', isDeleted: false },
-    { $inc: { views: 1 } },
-    { new: true }
-  )
-    .populate('originalAuthor', 'firstName lastName username jobTitle socialHandle organization organizationLink')
-    .populate('author', 'firstName lastName username jobTitle socialHandle organization organizationLink')
-    .populate('comments.user', 'firstName lastName username email role jobTitle')
-    .populate('comments.replies.user', 'firstName lastName username email role jobTitle');
-
-  if (!blog) return res.status(404).json({ error: 'Blog not found' });
-
-  const blogObj = blog.toObject();
-
-  if (blogObj.author && blogObj.originalAuthor && blogObj.author._id.toString() !== blogObj.originalAuthor._id.toString()) {
-    delete blogObj.author;
-  }
-
-  blogObj.comments = (blogObj.comments || [])
-    .filter((comment) => comment && !comment.isDeleted && comment.isVisible !== false)
-    .map((comment) => ({
-      ...comment,
-      replies: (comment.replies || []).filter((reply) => !reply.isDeleted && reply.isVisible !== false),
-    }));
-
-  res.json(blogObj);
-};
-
-exports.addPublicComment = async (req, res) => {
-  const { slug } = req.params;
-  const { name, email, phone, content, parentComment } = req.body || {};
-
-  if (!name?.trim() || !email?.trim() || !content?.trim()) {
-    return res.status(400).json({ error: 'Name, email, and comment content are required.' });
-  }
-
-  const blog = await Blog.findOne({ slug, status: 'published', isDeleted: false });
-  if (!blog) return res.status(404).json({ error: 'Blog not found' });
-
-  const payload = {
-    name: name.trim(),
-    email: email.trim().toLowerCase(),
-    phone: phone?.trim() || '',
-    role: req.user?.role || 'guest',
-    user: req.user?.id || null,
-    content: content.trim(),
-    parentComment: parentComment || null,
-    isVisible: true,
-    isDeleted: false,
-    replies: [],
-    createdAt: new Date(),
-  };
-
-  if (parentComment) {
-    const target = findCommentById(blog, parentComment);
-    if (!target) {
-      return res.status(404).json({ error: 'Parent comment not found' });
-    }
-
-    if (target.parent) {
-      target.parent.replies.push(payload);
+      if (target.parent) {
+        target.parent.replies.push(payload);
+      } else {
+        target.comment.replies.push(payload);
+      }
     } else {
-      target.comment.replies.push(payload);
+      blog.comments.push(payload);
     }
-  } else {
-    blog.comments.push(payload);
+
+    await blog.save();
+
+    res.status(201).json({ message: 'Comment added successfully', comment: parentComment ? payload : blog.comments[blog.comments.length - 1] });
+
+    setImmediate(async () => {
+      try {
+        const reviewers = await User.find({ role: { $in: [ROLES.ADMIN, ROLES.COMMUNICATION_OFFICER, ROLES.EDITOR] }, isActive: true })
+          .select('_id')
+          .lean();
+
+        if (reviewers.length > 0) {
+          const notifications = reviewers.map((reviewer) => ({
+            recipient: reviewer._id,
+            sender: req.user?._id || null,
+            type: 'ARTICLE_COMMENT',
+            message: `New comment on "${blog.title}" from ${payload.name}.`,
+            article: blog._id,
+          }));
+          await Notification.insertMany(notifications);
+        }
+      } catch (asyncErr) {
+        console.error('Comment notification failed:', asyncErr.message);
+      }
+    });
+
+  } catch (error) {
+    next(error);
   }
-
-  await blog.save();
-
-  const reviewers = await User.find({ role: { $in: [ROLES.ADMIN, ROLES.COMMUNICATION_OFFICER, ROLES.EDITOR] }, isActive: true });
-  if (reviewers.length > 0) {
-    const notifications = reviewers.map((reviewer) => ({
-      recipient: reviewer._id,
-      sender: req.user?._id || null,
-      type: 'ARTICLE_COMMENT',
-      message: `New comment on "${blog.title}" from ${payload.name}.`,
-      article: blog._id,
-    }));
-
-    await Notification.insertMany(notifications).catch((err) => console.error('Comment notification failed:', err.message));
-  }
-
-  res.status(201).json({ message: 'Comment added successfully', comment: parentComment ? payload : blog.comments[blog.comments.length - 1] });
 };
 
 // ─── Comment Moderation Endpoints ─────────────────────────────────────────────
@@ -364,37 +377,36 @@ exports.respondToEditorConsent = async (req, res) => {
 
   await blog.save();
 
-  const recipient = blog.author && blog.author._id ? blog.author._id : blog.originalAuthor?._id;
-  if (recipient) {
-    await Notification.create({
-      recipient,
-      sender: req.user.id,
-      type: 'EDITOR_EDIT_PROMPT',
-      message: approved
-        ? `The writer approved changes to "${blog.title}" and publishing can proceed.`
-        : `The writer rejected the editor changes for "${blog.title}" and publication is blocked.`,
-      article: blog._id,
-    }).catch((err) => console.error('Consent notification failed:', err.message));
-  }
-
   res.json({
     message: approved ? 'Editor changes approved. This blog can continue to publication.' : 'Editor changes rejected. The blog has been returned to draft.',
     blog,
+  });
+
+  setImmediate(() => {
+    const recipient = blog.author && blog.author._id ? blog.author._id : blog.originalAuthor?._id;
+    if (recipient) {
+      Notification.create({
+        recipient,
+        sender: req.user.id,
+        type: 'EDITOR_EDIT_PROMPT',
+        message: approved
+          ? `The writer approved changes to "${blog.title}" and publishing can proceed.`
+          : `The writer rejected the editor changes for "${blog.title}" and publication is blocked.`,
+        article: blog._id,
+      }).catch((err) => console.error('Consent notification failed:', err.message));
+    }
   });
 };
 
 // ─── Authenticated List / Detail ──────────────────────────────────────────────
 
-/**
- * GET /api/blogs
- * Reviewers see all blogs; creators see only their own.
- */
 exports.getBlogs = async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
   const filter = buildBlogFilter(req.query, req.user);
 
   const [blogs, total] = await Promise.all([
     Blog.find(filter)
+      .select('-blocks -editorModifications -bodyHtml')
       .sort({ updatedAt: -1 })
       .skip(skip)
       .limit(limit)
@@ -402,17 +414,14 @@ exports.getBlogs = async (req, res) => {
       .populate('author', 'username email role firstName lastName jobTitle socialHandle organization organizationLink')
       .populate('publishedBy', 'username firstName lastName jobTitle')
       .populate('reviewHistory.reviewer', 'username firstName lastName jobTitle')
-      .populate('changeRequests.commenter', 'username firstName lastName role jobTitle'),
+      .populate('changeRequests.commenter', 'username firstName lastName role jobTitle')
+      .lean(),
     Blog.countDocuments(filter),
   ]);
 
   res.json(paginatedResponse(blogs, total, { page, limit }));
 };
 
-/**
- * GET /api/blogs/my-submissions
- * Status tracker for content creators.
- */
 exports.getMySubmissions = async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
   const filter = {
@@ -426,24 +435,22 @@ exports.getMySubmissions = async (req, res) => {
       .select('title slug status lastRejectionNote submittedAt publishedAt views createdAt updatedAt')
       .sort({ updatedAt: -1 })
       .skip(skip)
-      .limit(limit),
+      .limit(limit)
+      .lean(),
     Blog.countDocuments(filter),
   ]);
 
   res.json(paginatedResponse(blogs, total, { page, limit }));
 };
 
-/**
- * GET /api/blogs/:id
- * Full blog detail for permitted roles.
- */
 exports.getBlogById = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false })
     .populate('originalAuthor', 'username email role firstName lastName jobTitle socialHandle organization organizationLink')
     .populate('author', 'username email role firstName lastName jobTitle socialHandle organization organizationLink')
     .populate('publishedBy', 'username firstName lastName jobTitle')
     .populate('reviewHistory.reviewer', 'username firstName lastName role jobTitle')
-    .populate('changeRequests.commenter', 'username firstName lastName role jobTitle');
+    .populate('changeRequests.commenter', 'username firstName lastName role jobTitle')
+    .lean();
 
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
 
@@ -487,20 +494,19 @@ exports.getBlogStats = async (req, res) => {
 
 // ─── CRUD Operations ──────────────────────────────────────────────────────────
 
-/**
- * POST /api/blogs
- * Create a new draft blog article.
- */
 exports.createBlog = async (req, res) => {
   const imgFile = req.files?.img?.[0];
   const docFile = req.files?.document?.[0];
 
-  if (!imgFile) {
+  const bodyData = req.parsedBody || req.body || {};
+  let { title, tag, excerpt, excerptBlocks, socialHandle, organizationLink, modal, blocks, bodyHtml, img: bodyImgUrl } = bodyData;
+
+  // 🟢 High-Performance Fix: Accepts both Direct Cloudinary Image URL (JSON) or Multipart File Upload
+  const coverImageUrl = imgFile ? imgFile.path : (typeof bodyImgUrl === 'string' && bodyImgUrl.trim() ? bodyImgUrl.trim() : null);
+
+  if (!coverImageUrl) {
     return res.status(400).json({ error: 'A cover image is required' });
   }
-
-  const bodyData = req.parsedBody || req.body || {};
-  let { title, tag, excerpt, excerptBlocks, socialHandle, organizationLink, modal, blocks, bodyHtml } = bodyData;
 
   if (typeof blocks === 'string') {
     try { blocks = JSON.parse(blocks); } catch (e) { blocks = []; }
@@ -516,13 +522,12 @@ exports.createBlog = async (req, res) => {
     return res.status(400).json({ error: 'title, tag, and at least one of excerpt/excerptBlocks/blocks is required' });
   }
 
-  const author = await User.findById(req.user.id).select('socialHandle organizationLink role jobTitle');
+  const author = await User.findById(req.user.id).select('socialHandle organizationLink role jobTitle').lean();
   const slug = await generateSlug(title);
 
-  const imgPublicId = imgFile.filename || imgFile.public_id || '';
-  const docPublicId = docFile ? (docFile.filename || docFile.public_id || '') : '';
+  const imgPublicId = imgFile ? (imgFile.filename || imgFile.public_id || '') : (req.body.imgPublicId || '');
+  const docPublicId = docFile ? (docFile.filename || docFile.public_id || '') : (req.body.documentPublicId || '');
 
-  // Apply uploaded inline images to blocks and excerptBlocks
   const inlineFiles = req.files?.images || [];
   const finalBlocks = applyUploadedImagesToBlocks(Array.isArray(blocks) ? blocks : [], inlineFiles);
   const finalExcerptBlocks = applyUploadedImagesToBlocks(Array.isArray(excerptBlocks) ? excerptBlocks : [], inlineFiles);
@@ -537,13 +542,18 @@ exports.createBlog = async (req, res) => {
     modal: modal || {},
     socialHandle: socialHandle || author?.socialHandle,
     organizationLink: organizationLink || author?.organizationLink,
-    img: imgFile.path,
+    img: coverImageUrl,
     imgPublicId,
     bodyHtml: bodyHtml || '',
     ...(docFile && {
       documentUrl: docFile.path,
       documentPublicId: docPublicId,
       documentName: docFile.originalname,
+    }),
+    ...(!docFile && req.body.documentUrl && {
+      documentUrl: req.body.documentUrl,
+      documentPublicId: req.body.documentPublicId || '',
+      documentName: req.body.documentName || '',
     }),
     originalAuthor: req.user.id,
     originalAuthorRole: req.user.role,
@@ -560,26 +570,21 @@ exports.createBlog = async (req, res) => {
     targetLabel: blog.title,
   });
 
-  // If frontend provided bodyHtml but no structured blocks, attempt to parse into blocks
-  try {
-    if ((!blog.blocks || blog.blocks.length === 0) && bodyHtml) {
+  if ((!blog.blocks || blog.blocks.length === 0) && bodyHtml) {
+    try {
       const parsed = htmlToBlocks(bodyHtml);
       if (parsed && parsed.length) {
         blog.blocks = applyUploadedImagesToBlocks(parsed, req.files?.images || []);
         await blog.save();
       }
+    } catch (e) {
+      console.error('htmlToBlocks parse failed:', e.message);
     }
-  } catch (e) {
-    console.error('htmlToBlocks parse failed:', e.message);
   }
 
   res.status(201).json({ message: 'Created successfully', blog });
 };
 
-/**
- * PUT /api/blogs/:id
- * Updates blog content.
- */
 exports.updateBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
@@ -596,7 +601,7 @@ exports.updateBlog = async (req, res) => {
   }
 
   const bodyData = req.parsedBody || req.body || {};
-  let { title, tag, excerpt, excerptBlocks, socialHandle, organizationLink, modal, blocks, bodyHtml } = bodyData;
+  let { title, tag, excerpt, excerptBlocks, socialHandle, organizationLink, modal, blocks, bodyHtml, img: bodyImgUrl } = bodyData;
 
   if (typeof blocks === 'string') {
     try { blocks = JSON.parse(blocks); } catch (e) {}
@@ -633,20 +638,29 @@ exports.updateBlog = async (req, res) => {
   const imgFile = req.files?.img?.[0] || req.file;
   const docFile = req.files?.document?.[0];
 
+  // 🟢 High-Performance Fix: Allows updating cover image via Direct Cloudinary URL string
   if (imgFile) {
-    await destroyAsset(blog.imgPublicId, 'image');
+    destroyAsset(blog.imgPublicId, 'image');
     blog.img = imgFile.path;
     blog.imgPublicId = imgFile.filename || imgFile.public_id || '';
+  } else if (typeof bodyImgUrl === 'string' && bodyImgUrl.trim()) {
+    blog.img = bodyImgUrl.trim();
+    if (req.body.imgPublicId) {
+      blog.imgPublicId = req.body.imgPublicId;
+    }
   }
 
   if (docFile) {
-    await destroyAsset(blog.documentPublicId, 'raw');
+    destroyAsset(blog.documentPublicId, 'raw');
     blog.documentUrl = docFile.path;
     blog.documentPublicId = docFile.filename || docFile.public_id || '';
     blog.documentName = docFile.originalname;
+  } else if (req.body.documentUrl) {
+    blog.documentUrl = req.body.documentUrl;
+    if (req.body.documentPublicId) blog.documentPublicId = req.body.documentPublicId;
+    if (req.body.documentName) blog.documentName = req.body.documentName;
   }
 
-  // Apply uploaded inline images to blocks and excerptBlocks
   const inlineFiles = req.files?.images || [];
   if (inlineFiles.length > 0) {
     try {
@@ -657,7 +671,6 @@ exports.updateBlog = async (req, res) => {
     }
   }
 
-  // If blocks still empty but bodyHtml provided, attempt to parse to structured blocks
   if ((!blog.blocks || blog.blocks.length === 0) && bodyHtml) {
     try {
       const parsed = htmlToBlocks(bodyHtml);
@@ -697,6 +710,8 @@ exports.deleteBlog = async (req, res) => {
   blog.deletedAt = new Date();
   blog.deletedBy = req.user.id;
   await blog.save();
+
+  invalidatePublicBlogsCache();
 
   writeAuditLog({
     req,
@@ -739,8 +754,8 @@ exports.hardDeleteBlog = async (req, res) => {
     return res.status(404).json({ error: 'Blog not found in trash. Soft-delete it first.' });
   }
 
-  await destroyAsset(blog.imgPublicId, 'image');
-  await destroyAsset(blog.documentPublicId, 'raw');
+  destroyAsset(blog.imgPublicId, 'image');
+  destroyAsset(blog.documentPublicId, 'raw');
   await blog.deleteOne();
 
   writeAuditLog({
@@ -759,11 +774,13 @@ exports.getDeletedBlogs = async (req, res) => {
 
   const [blogs, total] = await Promise.all([
     Blog.find({ isDeleted: true })
+      .select('-blocks -editorModifications -bodyHtml')
       .sort({ deletedAt: -1 })
       .skip(skip)
       .limit(limit)
       .populate('originalAuthor', 'username firstName lastName jobTitle')
-      .populate('deletedBy', 'username firstName lastName jobTitle'),
+      .populate('deletedBy', 'username firstName lastName jobTitle')
+      .lean(),
     Blog.countDocuments({ isDeleted: true }),
   ]);
 
@@ -806,169 +823,212 @@ exports.submitBlog = async (req, res) => {
   });
 };
 
-exports.reviewBlog = async (req, res) => {
-  const { decision, note } = req.body;
+exports.reviewBlog = async (req, res, next) => {
+  try {
+    const { decision, note } = req.body;
 
-  if (!['approved', 'rejected'].includes(decision)) {
-    return res.status(400).json({ error: 'decision must be "approved" or "rejected"' });
-  }
-  if (decision === 'rejected' && !note?.trim()) {
-    return res.status(400).json({ error: 'A comment explaining the rejection is required' });
-  }
-
-  const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false }).populate(
-    'originalAuthor',
-    'email firstName jobTitle'
-  );
-  if (!blog) return res.status(404).json({ error: 'Blog not found' });
-  if (blog.status !== 'pending_review') {
-    return res.status(400).json({ error: 'Blog is not awaiting review' });
-  }
-
-  blog.reviewHistory.push({ decision, reviewer: req.user.id, note: note || '' });
-
-  if (decision === 'approved') {
-    blog.status = 'approved';
-    blog.lastRejectionNote = undefined;
-  } else {
-    blog.status = 'draft';
-    blog.lastRejectionNote = note;
-    blog.submittedAt = undefined;
-    if (!blog.changeRequests) blog.changeRequests = [];
-    blog.changeRequests.push({
-      commenter: req.user.id,
-      role: req.user.role,
-      comment: note,
-      requestedAt: new Date(),
-      implemented: false,
-    });
-  }
-
-  await blog.save();
-
-  if (decision === 'approved' && Notification) {
-    const officers = await User.find({ role: ROLES.COMMUNICATION_OFFICER, isActive: true }).select('_id');
-    const alerts = officers.map((off) => ({
-      recipient: off._id,
-      sender: req.user.id,
-      type: 'BLOG_APPROVED',
-      message: `Article "${blog.title}" has been approved and is ready to be published live.`,
-      article: blog._id,
-    }));
-    if (alerts.length > 0) await Notification.insertMany(alerts);
-  }
-
-  if (blog.originalAuthor?.email) {
-    if (decision === 'approved') {
-      sendBlogApprovalEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title).catch((err) =>
-        console.error('[Email] Failed to send approval email:', err.message)
-      );
-    } else {
-      sendBlogRejectionEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title, note).catch((err) =>
-        console.error('[Email] Failed to send rejection email:', err.message)
-      );
-      if (Notification) {
-        try {
-          await Notification.create({
-            recipient: blog.originalAuthor._id || blog.originalAuthor,
-            sender: req.user.id,
-            type: 'CHANGE_REQUEST',
-            message: `Reviewer asked for changes on "${blog.title}": ${note}`,
-            article: blog._id,
-          });
-        } catch (err) {
-          console.error('Failed to create change request notification:', err.message);
-        }
-      }
+    if (!['approved', 'rejected'].includes(decision)) {
+      return res.status(400).json({ error: 'decision must be "approved" or "rejected"' });
     }
-  }
+    if (decision === 'rejected' && !note?.trim()) {
+      return res.status(400).json({ error: 'A comment explaining the rejection is required' });
+    }
 
-  writeAuditLog({
-    req,
-    action: 'blog.review',
-    targetModel: 'Blog',
-    targetId: blog._id,
-    targetLabel: blog.title,
-    detail: { decision, note: note || null },
-  });
-
-  res.json({
-    message:
-      decision === 'approved'
-        ? 'Blog approved. It now awaits publishing by an authorized publisher.'
-        : 'Blog rejected and returned to draft with your comment.',
-    blog,
-  });
-};
-
-exports.publishBlog = async (req, res) => {
-  const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false }).populate(
-    'originalAuthor',
-    'email firstName jobTitle'
-  );
-  if (!blog) return res.status(404).json({ error: 'Blog not found' });
-  if (blog.status !== 'approved') {
-    return res.status(400).json({ error: 'Only approved blogs can be published' });
-  }
-
-  blog.status = 'published';
-  blog.publishedAt = new Date();
-  blog.publishedBy = req.user.id;
-  await blog.save();
-
-  if (blog.originalAuthor?.email) {
-    sendBlogPublishedEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title, blog.slug).catch(
-      (err) => console.error('[Email] Failed to send published email:', err.message)
+    const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false }).populate(
+      'originalAuthor',
+      'email firstName jobTitle'
     );
-  }
+    if (!blog) return res.status(404).json({ error: 'Blog not found' });
+    if (blog.status !== 'pending_review') {
+      return res.status(400).json({ error: 'Blog is not awaiting review' });
+    }
 
-  writeAuditLog({
-    req,
-    action: 'blog.publish',
-    targetModel: 'Blog',
-    targetId: blog._id,
-    targetLabel: blog.title,
-  });
+    blog.reviewHistory.push({ decision, reviewer: req.user.id, note: note || '' });
 
-  res.json({ message: 'Blog is now live on the website', blog });
-};
+    if (decision === 'approved') {
+      blog.status = 'approved';
+      blog.lastRejectionNote = undefined;
+    } else {
+      blog.status = 'draft';
+      blog.lastRejectionNote = note;
+      blog.submittedAt = undefined;
+      if (!blog.changeRequests) blog.changeRequests = [];
+      blog.changeRequests.push({
+        commenter: req.user.id,
+        role: req.user.role,
+        comment: note,
+        requestedAt: new Date(),
+        implemented: false,
+      });
+    }
 
-exports.unpublishBlog = async (req, res) => {
-  const { note } = req.body;
-  const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
-  if (!blog) return res.status(404).json({ error: 'Blog not found' });
-  if (blog.status !== 'published') {
-    return res.status(400).json({ error: 'Only published blogs can be unpublished' });
-  }
+    await blog.save();
 
-  blog.status = 'approved';
-  blog.publishedAt = undefined;
-  blog.publishedBy = undefined;
-
-  if (note?.trim()) {
-    blog.reviewHistory.push({
-      decision: 'rejected',
-      reviewer: req.user.id,
-      note: `Unpublished: ${note.trim()}`,
+    res.json({
+      message:
+        decision === 'approved'
+          ? 'Blog approved. It now awaits publishing by an authorized publisher.'
+          : 'Blog rejected and returned to draft with your comment.',
+      blog,
     });
+
+    setImmediate(async () => {
+      try {
+        if (decision === 'approved') {
+          const officers = await User.find({ role: ROLES.COMMUNICATION_OFFICER, isActive: true }).select('_id').lean();
+          const alerts = officers.map((off) => ({
+            recipient: off._id,
+            sender: req.user.id,
+            type: 'BLOG_APPROVED',
+            message: `Article "${blog.title}" has been approved and is ready to be published live.`,
+            article: blog._id,
+          }));
+          if (alerts.length > 0) await Notification.insertMany(alerts);
+        }
+
+        if (blog.originalAuthor?.email) {
+          if (decision === 'approved') {
+            await sendBlogApprovalEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title);
+          } else {
+            await sendBlogRejectionEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title, note);
+            await Notification.create({
+              recipient: blog.originalAuthor._id || blog.originalAuthor,
+              sender: req.user.id,
+              type: 'CHANGE_REQUEST',
+              message: `Reviewer asked for changes on "${blog.title}": ${note}`,
+              article: blog._id,
+            });
+          }
+        }
+
+        writeAuditLog({
+          req,
+          action: 'blog.review',
+          targetModel: 'Blog',
+          targetId: blog._id,
+          targetLabel: blog.title,
+          detail: { decision, note: note || null },
+        });
+      } catch (asyncErr) {
+        console.error('Non-blocking review side-effects error:', asyncErr.message);
+      }
+    });
+
+  } catch (error) {
+    next(error);
   }
-
-  await blog.save();
-
-  writeAuditLog({
-    req,
-    action: 'blog.unpublish',
-    targetModel: 'Blog',
-    targetId: blog._id,
-    targetLabel: blog.title,
-    detail: { note: note || null },
-  });
-
-  res.json({
-    message: 'Blog removed from the public website. It is back in approved status.',
-    blog,
-  });
 };
 
+// 🟢 ATOMIC FAST PUBLISH
+exports.publishBlog = async (req, res, next) => {
+  try {
+    const existing = await Blog.findOne({ _id: req.params.id, isDeleted: false }).select('status title originalAuthor slug').populate('originalAuthor', 'email firstName');
+    if (!existing) return res.status(404).json({ error: 'Blog not found' });
+    if (existing.status !== 'approved') {
+      return res.status(400).json({ error: 'Only approved blogs can be published' });
+    }
+
+    const blog = await Blog.findOneAndUpdate(
+      { _id: req.params.id, isDeleted: false },
+      {
+        $set: {
+          status: 'published',
+          publishedAt: new Date(),
+          publishedBy: req.user.id,
+        },
+      },
+      { new: true }
+    ).select('-blocks -editorModifications -bodyHtml').lean();
+
+    invalidatePublicBlogsCache();
+
+    res.json({ message: 'Blog is now live on the website', blog });
+
+    setImmediate(async () => {
+      try {
+        if (existing.originalAuthor?.email) {
+          await sendBlogPublishedEmail(existing.originalAuthor.email, existing.originalAuthor.firstName, existing.title, existing.slug);
+        }
+
+        writeAuditLog({
+          req,
+          action: 'blog.publish',
+          targetModel: 'Blog',
+          targetId: existing._id,
+          targetLabel: existing.title,
+        });
+
+        blogEventBus.emit('blog:published', { blog: existing, userId: req.user.id });
+      } catch (asyncErr) {
+        console.error('Non-blocking publish side-effects error:', asyncErr.message);
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+// 🟢 ATOMIC FAST UNPUBLISH
+exports.unpublishBlog = async (req, res, next) => {
+  try {
+    const { note } = req.body;
+    const existing = await Blog.findOne({ _id: req.params.id, isDeleted: false }).select('status title author originalAuthor');
+    if (!existing) return res.status(404).json({ error: 'Blog not found' });
+    if (existing.status !== 'published') {
+      return res.status(400).json({ error: 'Only published blogs can be unpublished' });
+    }
+
+    const updatePayload = {
+      $set: { status: 'approved' },
+      $unset: { publishedAt: 1, publishedBy: 1 },
+    };
+
+    if (note?.trim()) {
+      updatePayload.$push = {
+        reviewHistory: {
+          decision: 'rejected',
+          reviewer: req.user.id,
+          note: `Unpublished: ${note.trim()}`,
+        },
+      };
+    }
+
+    const blog = await Blog.findOneAndUpdate(
+      { _id: req.params.id, isDeleted: false },
+      updatePayload,
+      { new: true }
+    ).select('-blocks -editorModifications -bodyHtml').lean();
+
+    invalidatePublicBlogsCache();
+
+    res.json({
+      message: 'Blog removed from the public website. It is back in approved status.',
+      blog,
+    });
+
+    setImmediate(() => {
+      try {
+        writeAuditLog({
+          req,
+          action: 'blog.unpublish',
+          targetModel: 'Blog',
+          targetId: existing._id,
+          targetLabel: existing.title,
+          detail: { note: note || null },
+        });
+
+        blogEventBus.emit('blog:unpublished', { blog: existing, userId: req.user.id });
+      } catch (asyncErr) {
+        console.error('Non-blocking unpublish side-effects error:', asyncErr.message);
+      }
+    });
+
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.invalidatePublicBlogsCache = invalidatePublicBlogsCache;
 exports.REVIEWERS = REVIEWERS;
 exports.CREATORS = CREATORS;

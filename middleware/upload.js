@@ -18,12 +18,16 @@ const storage = new CloudinaryStorage({
       folder: 'blogs/images',
       resource_type: 'image',
       allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+      // 🟢 CRITICAL SPEED FIX: Resize huge camera photos and auto-compress on Cloudinary
+      transformation: [
+        { width: 1920, height: 1080, crop: 'limit' }, // Resizes 4K/Camera photos down to 1080p
+        { quality: 'auto:good', fetch_format: 'auto' }, // Automatically uses WebP/AVIF compression
+      ],
     };
   },
 });
 
 const fileFilter = (req, file, cb) => {
-  // 🟢 Allow 'img', 'image', and 'images' field names
   const isImageField = ['img', 'image', 'images'].includes(file.fieldname);
 
   if (isImageField && !file.mimetype.startsWith('image/')) {
@@ -40,17 +44,21 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max per file
+  limits: {
+    fileSize: 15 * 1024 * 1024,   // 15MB max per image/PDF file
+    fieldSize: 100 * 1024 * 1024, // 100MB max for stringified text fields (blocks/JSON content)
+    fields: 500,                  // Allowed form fields count
+    parts: 1000,                  // Allowed total parts
+  },
 });
 
 // Configure exact fields accepted by POST/PUT blog endpoints
 const uploadBlogFiles = upload.fields([
   { name: 'img', maxCount: 1 },        // Cover Image
-  { name: 'images', maxCount: 50 },    // Inline Section Images
+  { name: 'images', maxCount: 100 },   // Inline Section Images
   { name: 'document', maxCount: 1 },   // PDF Document
 ]);
 
-// 🟢 Clean exports object
 module.exports = {
   upload,
   uploadBlogFiles,

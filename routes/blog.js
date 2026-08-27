@@ -10,6 +10,17 @@ const asyncHandler = require('../utils/asyncHandler');
 const { REVIEWERS, CREATORS } = blogController;
 
 /**
+ * Helper middleware to conditionally skip Multer parsing if the request is pure JSON
+ * (e.g. direct Cloudinary browser uploads).
+ */
+const handleUploadFilesConditionally = (req, res, next) => {
+  if (req.headers['content-type'] && req.headers['content-type'].includes('application/json')) {
+    return next();
+  }
+  return uploadBlogFiles(req, res, next);
+};
+
+/**
  * @swagger
  * tags:
  *   name: Blogs
@@ -287,7 +298,14 @@ router.get('/:id', protect, asyncHandler(blogController.getBlogById));
  *       201: { description: Blog created as draft }
  *       400: { description: Missing image or invalid data }
  */
-router.post('/', protect, authorize(...CREATORS), uploadBlogFiles, parseBlogBody, asyncHandler(blogController.createBlog));
+router.post(
+  '/',
+  protect,
+  authorize(...CREATORS),
+  handleUploadFilesConditionally,
+  parseBlogBody,
+  asyncHandler(blogController.createBlog)
+);
 
 // ─── Update ────────────────────────────────────────────────────────────────────
 
@@ -326,7 +344,13 @@ router.post('/', protect, authorize(...CREATORS), uploadBlogFiles, parseBlogBody
  *       200: { description: Blog updated }
  *       403: { description: Not permitted in current status }
  */
-router.put('/:id', protect, uploadBlogFiles, parseBlogBody, asyncHandler(blogController.updateBlog));
+router.put(
+  '/:id',
+  protect,
+  handleUploadFilesConditionally,
+  parseBlogBody,
+  asyncHandler(blogController.updateBlog)
+);
 
 // ─── Delete (soft) ─────────────────────────────────────────────────────────────
 
