@@ -60,7 +60,54 @@ function normalizeOrganizationName(org) {
  *   description: Public registration, login, token refresh, and password recovery management
  */
 
-// ─── Register (Public Direct Registration) ─────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/register:
+ *   post:
+ *     summary: Register a new user
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - username
+ *               - email
+ *               - password
+ *               - firstName
+ *               - lastName
+ *               - role
+ *             properties:
+ *               username:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               firstName:
+ *                 type: string
+ *               lastName:
+ *                 type: string
+ *               role:
+ *                 type: string
+ *               organization:
+ *                 type: string
+ *               jobTitle:
+ *                 type: string
+ *               organizationLink:
+ *                 type: string
+ *               socialHandle:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Account created successfully
+ *       400:
+ *         description: Validation error or profile already exists
+ *       403:
+ *         description: Forbidden role assignment
+ */
 router.post('/register', authLimiter, async (req, res) => {
   try {
     const {
@@ -161,7 +208,35 @@ router.post('/register', authLimiter, async (req, res) => {
   }
 });
 
-// ─── Login ─────────────────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/login:
+ *   post:
+ *     summary: Authenticate user and obtain tokens
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 description: Email address or username
+ *               password:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Login successful
+ *       401:
+ *         description: Invalid credentials
+ *       403:
+ *         description: Account deactivated or password expired
+ */
 router.post('/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -209,7 +284,6 @@ router.post('/login', authLimiter, async (req, res) => {
     user.lastLoginAt = new Date();
     user.loginCount = (user.loginCount || 0) + 1;
 
-    // Save strictly modified login fields without schema validation failures
     await user.save({ validateModifiedOnly: true });
 
     writeAuditLog({
@@ -234,7 +308,32 @@ router.post('/login', authLimiter, async (req, res) => {
   }
 });
 
-// ─── Refresh Token ─────────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/refresh:
+ *   post:
+ *     summary: Refresh access token using refresh token
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - refreshToken
+ *               - userId
+ *             properties:
+ *               refreshToken:
+ *                 type: string
+ *               userId:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: New access token issued
+ *       401:
+ *         description: Invalid or expired refresh token
+ */
 router.post('/refresh', async (req, res) => {
   try {
     const { refreshToken, userId } = req.body;
@@ -259,7 +358,20 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
-// ─── Logout ────────────────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/logout:
+ *   post:
+ *     summary: Log out current user
+ *     tags: [Authentication]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Logged out successfully
+ *       401:
+ *         description: Unauthorized
+ */
 router.post('/logout', protect, async (req, res) => {
   try {
     await User.findByIdAndUpdate(req.user.id, { refreshToken: null });
@@ -278,7 +390,27 @@ router.post('/logout', protect, async (req, res) => {
   }
 });
 
-// ─── Forgot Password ───────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/forgot-password:
+ *   post:
+ *     summary: Request a password reset link
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *             properties:
+ *               email:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Reset email sent if account exists
+ */
 router.post('/forgot-password', authLimiter, async (req, res) => {
   try {
     const { email } = req.body;
@@ -311,7 +443,32 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
   }
 });
 
-// ─── Reset Password ────────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/reset-password:
+ *   post:
+ *     summary: Reset password using reset token
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - token
+ *               - newPassword
+ *             properties:
+ *               token:
+ *                 type: string
+ *               newPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Password updated successfully
+ *       400:
+ *         description: Invalid or expired token
+ */
 router.post('/reset-password', authLimiter, async (req, res) => {
   try {
     const { token, new_password, newPassword } = req.body;
@@ -347,7 +504,34 @@ router.post('/reset-password', authLimiter, async (req, res) => {
   }
 });
 
-// ─── Change Password ──────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/change-password:
+ *   post:
+ *     summary: Change password for authenticated user
+ *     tags: [Authentication]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - currentPassword
+ *               - newPassword
+ *             properties:
+ *               currentPassword:
+ *                 type: string
+ *               newPassword:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Password changed successfully
+ *       400:
+ *         description: Invalid password or validation failure
+ */
 router.post('/change-password', protect, async (req, res) => {
   try {
     const { currentPassword, oldPassword, current_password, newPassword, new_password } = req.body;
@@ -375,7 +559,6 @@ router.post('/change-password', protect, async (req, res) => {
     user.isPasswordResetRequired = false;
     user.refreshToken = null;
 
-    // Save password change without triggering unrelated validation checks
     await user.save({ validateModifiedOnly: true });
 
     sendPasswordChangedEmail(user.email, user.firstName).catch((err) =>
@@ -396,7 +579,46 @@ router.post('/change-password', protect, async (req, res) => {
   }
 });
 
-// ─── Profile Operations ────────────────────────────────────────────────────────
+/**
+ * @swagger
+ * /api/auth/me:
+ *   get:
+ *     summary: Get current authenticated user profile
+ *     tags: [Authentication]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: User profile retrieved
+ *       401:
+ *         description: Unauthorized
+ *   put:
+ *     summary: Update current authenticated user profile
+ *     tags: [Authentication]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               firstName:
+ *                 type: string
+ *               lastName:
+ *                 type: string
+ *               jobTitle:
+ *                 type: string
+ *               organizationLink:
+ *                 type: string
+ *               socialHandle:
+ *                 type: string
+ *               dateOfBirth:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Profile updated
+ */
 router.get('/me', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select('-password -refreshToken');

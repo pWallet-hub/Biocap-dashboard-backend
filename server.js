@@ -16,7 +16,7 @@ dotenv.config();
 // Connect to Biocap Database
 connectDB();
 
-// 🟢 Initialize background event bus listener for non-blocking publishing side-effects
+// Initialize background event bus listener for non-blocking side effects
 require('./services/blogEventListener');
 
 const app = express();
@@ -52,7 +52,7 @@ app.use(
   })
 );
 
-// Expanded Body Parsers for Large Article Payloads (50MB)
+// Body Parsers for Large Article Payloads (50MB)
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
@@ -72,15 +72,52 @@ app.use((req, res, next) => {
 // Sanitize inputs against MongoDB Operator Injection
 app.use(mongoSanitize());
 
-// --- Swagger Configuration Options ---
+// ─── SENIOR-GRADE OPENAPI 3.0 SPECIFICATION ────────────────────────────────────
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
     info: {
       title: 'Biocap Dashboard API',
       version: '1.0.0',
-      description: 'API documentation for the Biocap Blog & User Dashboard platform',
+      description:
+        'Interactive, production-ready API documentation for the Biocap Blog & User Dashboard platform. Built with OpenAPI 3.0 standards for multi-role workflows (Admin, Communication Officer, Communication Editor, Content Creator).',
+      contact: {
+        name: 'BIOCAP Engineering Team',
+        url: 'https://biocap-rwanda.afs-rwanda.org',
+        email: 'dev@biocap-rwanda.org',
+      },
     },
+    // 🟢 1. STRICT TAG TAXONOMY: Pins Authentication on top
+    tags: [
+      {
+        name: 'Authentication',
+        description: 'Public registration, login, token refresh, and password recovery management',
+      },
+      {
+        name: 'Communication Officer',
+        description: 'Communication Officer review & management endpoints',
+      },
+      {
+        name: 'Communication Editor',
+        description: 'Editor workspace & article review endpoints',
+      },
+      {
+        name: 'Content Creator',
+        description: 'Contributor/Creator story submission endpoints',
+      },
+      {
+        name: 'Blogs',
+        description: 'Public and member blog operations',
+      },
+      {
+        name: 'Admin Management',
+        description: 'Administrative user management & platform settings',
+      },
+      {
+        name: 'Uploads',
+        description: 'Media and Cloudinary file upload endpoints',
+      },
+    ],
     servers: [
       {
         url: process.env.SERVER_URL || 'https://biocap-dashboard-backend.onrender.com',
@@ -92,32 +129,216 @@ const swaggerOptions = {
       },
     ],
     components: {
+      // 🟢 2. SECURITY SCHEMES: Standardized JWT Authentication
       securitySchemes: {
         bearerAuth: {
           type: 'http',
           scheme: 'bearer',
           bearerFormat: 'JWT',
-          description: 'Enter your JWT token in the format: Bearer <your_token_here>',
+          description: 'Enter your JWT access token in the format: Bearer <your_token_here>',
+        },
+      },
+      // 🟢 3. REUSABLE DATA SCHEMES (Rendered cleanly at the bottom of Swagger UI)
+      schemas: {
+        // --- User Domain ---
+        User: {
+          type: 'object',
+          required: ['_id', 'username', 'email', 'firstName', 'lastName', 'role'],
+          properties: {
+            _id: { type: 'string', example: '66a12345bc67890123456789', description: 'MongoDB ObjectId' },
+            username: { type: 'string', example: 'biocap_contributor' },
+            email: { type: 'string', format: 'email', example: 'contributor@biocap-rwanda.org' },
+            firstName: { type: 'string', example: 'Jean' },
+            lastName: { type: 'string', example: 'Nkurunziza' },
+            role: {
+              type: 'string',
+              enum: ['admin', 'communication_officer', 'editor', 'broadcast_content_creator', 'regular_user'],
+              example: 'broadcast_content_creator',
+            },
+            organization: { type: 'string', example: 'Alliance for Science Rwanda (AfS-Rwanda)' },
+            jobTitle: { type: 'string', example: 'Biotech Researcher' },
+            organizationLink: { type: 'string', format: 'uri', example: 'https://afs-rwanda.org' },
+            socialHandle: { type: 'string', example: 'Twitter: @jnkurunziza | LinkedIn: in/jnkurunziza' },
+            isActive: { type: 'boolean', example: true },
+            createdAt: { type: 'string', format: 'date-time', example: '2026-01-15T09:30:00.000Z' },
+          },
+        },
+        AuthTokenResponse: {
+          type: 'object',
+          required: ['accessToken', 'refreshToken', 'role', 'username', 'expiresIn'],
+          properties: {
+            accessToken: { type: 'string', example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' },
+            refreshToken: { type: 'string', example: '8f921a9c33e2182b84234567890abcdef1234567' },
+            role: { type: 'string', example: 'editor' },
+            username: { type: 'string', example: 'editor_rwanda' },
+            expiresIn: { type: 'string', example: '30m' },
+          },
+        },
+
+        // --- Article / Blog Domain ---
+        BlogBlock: {
+          type: 'object',
+          required: ['type'],
+          properties: {
+            type: { type: 'string', enum: ['p', 'h2', 'quote', 'image'], example: 'p' },
+            text: { type: 'string', example: 'Enhancing cassava drought tolerance using CRISPR technology.' },
+            caption: { type: 'string', example: 'Cassava crop trial fields in Huye District.' },
+            fitMode: { type: 'string', enum: ['cover', 'contain'], example: 'cover' },
+            src: { type: 'string', format: 'uri', example: 'https://res.cloudinary.com/biocap/image/upload/v1/cassava.jpg' },
+            fileKey: { type: 'string', example: 'section-img-123.jpg' },
+          },
+        },
+        BlogPost: {
+          type: 'object',
+          required: ['_id', 'title', 'slug', 'status', 'author'],
+          properties: {
+            _id: { type: 'string', example: '66b98765dc43210987654321' },
+            title: { type: 'string', example: 'Advancements in Rwandan Crop Biotechnology 2026' },
+            slug: { type: 'string', example: 'advancements-in-rwandan-crop-biotechnology-2026' },
+            excerpt: { type: 'string', example: 'A summary of new agricultural stewardship policies in Rwanda.' },
+            img: { type: 'string', format: 'uri', example: 'https://res.cloudinary.com/biocap/image/upload/v1/banner.jpg' },
+            tag: { type: 'string', example: 'Agriculture' },
+            status: { type: 'string', enum: ['draft', 'under_review', 'published', 'rejected'], example: 'published' },
+            author: { $ref: '#/components/schemas/User' },
+            originalAuthor: { $ref: '#/components/schemas/User' },
+            blocks: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/BlogBlock' },
+            },
+            organizationLink: { type: 'string', format: 'uri', example: 'https://biocap-rwanda.afs-rwanda.org' },
+            socialHandle: { type: 'string', example: '@RwandaBioCap' },
+            documentUrl: { type: 'string', format: 'uri', example: 'https://res.cloudinary.com/biocap/raw/upload/v1/report.pdf' },
+            documentName: { type: 'string', example: 'Annual_Stewardship_Report_2026.pdf' },
+            publishedAt: { type: 'string', format: 'date-time', example: '2026-02-10T14:00:00.000Z' },
+            createdAt: { type: 'string', format: 'date-time', example: '2026-02-01T10:00:00.000Z' },
+          },
+        },
+
+        // --- Article Comments Domain ---
+        ArticleComment: {
+          type: 'object',
+          required: ['_id', 'blog', 'content', 'email', 'name'],
+          properties: {
+            _id: { type: 'string', example: '66c111223344556677889900' },
+            blog: { type: 'string', example: '66b98765dc43210987654321' },
+            name: { type: 'string', example: 'Dr. Alice Mukamana' },
+            email: { type: 'string', format: 'email', example: 'alice.m@rab.gov.rw' },
+            content: { type: 'string', example: 'This is a well-researched publication on agricultural resilience.' },
+            isVisible: { type: 'boolean', example: true },
+            createdAt: { type: 'string', format: 'date-time', example: '2026-02-12T08:20:00.000Z' },
+          },
+        },
+
+        // --- Media & Cloudinary Domain ---
+        CloudinarySignatureResponse: {
+          type: 'object',
+          required: ['signature', 'timestamp', 'apiKey', 'cloudName'],
+          properties: {
+            signature: {
+              type: 'string',
+              example: 'a1b2c3d4e5f67890abcdef1234567890abcdef12',
+              description: 'Cryptographic SHA-1 signature',
+            },
+            timestamp: {
+              type: 'number',
+              example: 1770728000,
+              description: 'UNIX timestamp used for signature generation',
+            },
+            apiKey: {
+              type: 'string',
+              example: '123456789012345',
+              description: 'Cloudinary public API key',
+            },
+            cloudName: {
+              type: 'string',
+              example: 'biocap-rwanda',
+              description: 'Cloudinary cloud environment name',
+            },
+          },
+        },
+        DirectUploadResponse: {
+          type: 'object',
+          required: ['url', 'public_id'],
+          properties: {
+            url: {
+              type: 'string',
+              format: 'uri',
+              example: 'https://res.cloudinary.com/biocap/image/upload/v12345/sample.jpg',
+              description: 'Cloudinary CDN image URL',
+            },
+            public_id: {
+              type: 'string',
+              example: 'blog_images/sample_123',
+              description: 'Public asset identifier in Cloudinary',
+            },
+          },
+        },
+
+        // --- Error Domain ---
+        ErrorResponse: {
+          type: 'object',
+          required: ['message'],
+          properties: {
+            message: {
+              type: 'string',
+              example: 'Invalid input parameters or authorization failed.',
+            },
+          },
+        },
+      },
+      // 🟢 4. REUSABLE API RESPONSES
+      responses: {
+        UnauthorizedError: {
+          description: 'Access token is missing, expired, or invalid',
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/ErrorResponse' },
+            },
+          },
+        },
+        ForbiddenError: {
+          description: 'Insufficient role permissions for requested action',
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/ErrorResponse' },
+            },
+          },
+        },
+        NotFoundError: {
+          description: 'Requested resource could not be found',
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/ErrorResponse' },
+            },
+          },
         },
       },
     },
   },
-  apis: [
-    path.resolve(__dirname, 'routes', 'auth.js'),
-    path.resolve(__dirname, 'routes', 'blog.js'),
-    path.resolve(__dirname, 'routes', 'creator.js'),
-    path.resolve(__dirname, 'routes', 'editor.js'),
-    path.resolve(__dirname, 'routes', 'officer.js'),
-    path.resolve(__dirname, 'routes', 'admin.js'),
-    path.resolve(__dirname, 'routes', 'upload.js'),
-    path.resolve(__dirname, 'routes', 'signature.js'),
-  ],
+  // 🟢 5. SINGLE ROUTE PATTERN MATCHING (Prevents duplicate endpoint scanning)
+  apis: ['./routes/*.js'],
 };
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
 
+// Endpoint to inspect generated raw Swagger JSON
+app.get('/api-docs.json', (req, res) => {
+  res.setHeader('Content-Type', 'application/json');
+  res.send(swaggerDocs);
+});
+
+// 🟢 6. SWAGGER UI DISPLAY OPTIONS
+const swaggerUiOptions = {
+  explorer: true,
+  swaggerOptions: {
+    filter: true, // Enables live endpoint search bar
+    persistAuthorization: true, // Remembers Bearer JWT tokens across page reloads
+    docExpansion: 'list', // Renders clean, shortened bar view
+  },
+};
+
 // --- API Documentation Route ---
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs));
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs, swaggerUiOptions));
 
 // --- Route Declarations & Role-Based Mount Aliases ---
 app.use('/api/upload', uploadRoutes);
