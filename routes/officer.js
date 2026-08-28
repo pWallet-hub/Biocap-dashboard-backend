@@ -7,9 +7,8 @@ const { protect, authorize } = require('../middleware/authMiddleware');
 const asyncHandler = require('../utils/asyncHandler');
 const { ROLES } = require('../constants/roles');
 
-// Enforce authentication AND strict Communication Officer Role authorization ONLY
+// Enforce authentication globally across all officer route modules
 router.use(protect);
-router.use(authorize(ROLES.COMMUNICATION_OFFICER));
 
 /**
  * @swagger
@@ -29,7 +28,11 @@ router.use(authorize(ROLES.COMMUNICATION_OFFICER));
  *     security:
  *       - bearerAuth: []
  */
-router.get('/dashboard', asyncHandler(officerBlogController.getDashboard));
+router.get(
+  '/dashboard',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN),
+  asyncHandler(officerBlogController.getDashboard)
+);
 
 /**
  * @swagger
@@ -40,7 +43,11 @@ router.get('/dashboard', asyncHandler(officerBlogController.getDashboard));
  *     security:
  *       - bearerAuth: []
  */
-router.get('/blogs/stats', asyncHandler(officerBlogController.getBlogStats));
+router.get(
+  '/blogs/stats',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN),
+  asyncHandler(officerBlogController.getBlogStats)
+);
 
 // ─── Published Articles & Officer Commenting System ───────────────────────────
 
@@ -66,7 +73,11 @@ router.get('/blogs/stats', asyncHandler(officerBlogController.getBlogStats));
  *         name: limit
  *         schema: { type: integer, default: 10 }
  */
-router.get('/published', asyncHandler(officerBlogController.listPublishedBlogs));
+router.get(
+  '/published',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN, ROLES.EDITOR, ROLES.BROADCAST_CONTENT_CREATOR),
+  asyncHandler(officerBlogController.listPublishedBlogs)
+);
 
 /**
  * @swagger
@@ -82,8 +93,15 @@ router.get('/published', asyncHandler(officerBlogController.listPublishedBlogs))
  *         required: true
  *         schema: { type: string }
  */
-router.get('/published/:id', asyncHandler(officerBlogController.getPublishedBlogById));
+router.get(
+  '/published/:id',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN, ROLES.EDITOR, ROLES.BROADCAST_CONTENT_CREATOR),
+  asyncHandler(officerBlogController.getPublishedBlogById)
+);
 
+/**
+ * 🟢 SOLVES 403 FORBIDDEN ERROR: Allows Editors, Officers, Admins, and Creators to read internal review notes
+ */
 /**
  * @swagger
  * /api/officer/published/{id}/comments:
@@ -98,8 +116,15 @@ router.get('/published/:id', asyncHandler(officerBlogController.getPublishedBlog
  *         required: true
  *         schema: { type: string }
  */
-router.get('/published/:id/comments', asyncHandler(officerBlogController.getArticleComments));
+router.get(
+  '/published/:id/comments',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN, ROLES.EDITOR, ROLES.BROADCAST_CONTENT_CREATOR),
+  asyncHandler(officerBlogController.getArticleComments)
+);
 
+/**
+ * 🟢 SOLVES 403 FORBIDDEN ERROR: Allows Editors, Officers, Admins, and Creators to post revision notes
+ */
 /**
  * @swagger
  * /api/officer/published/{id}/comments:
@@ -123,7 +148,11 @@ router.get('/published/:id/comments', asyncHandler(officerBlogController.getArti
  *             properties:
  *               content: { type: string, description: "Officer comment text" }
  */
-router.post('/published/:id/comments', asyncHandler(officerBlogController.addArticleComment));
+router.post(
+  '/published/:id/comments',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN, ROLES.EDITOR, ROLES.BROADCAST_CONTENT_CREATOR),
+  asyncHandler(officerBlogController.addArticleComment)
+);
 
 // ─── Editor Changes Approval Workflow ──────────────────────────────────────────
 
@@ -141,7 +170,11 @@ router.post('/published/:id/comments', asyncHandler(officerBlogController.addArt
  *         required: true
  *         schema: { type: string }
  */
-router.get('/blogs/:id/editor-changes', asyncHandler(officerBlogController.getEditorChanges));
+router.get(
+  '/blogs/:id/editor-changes',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN, ROLES.EDITOR),
+  asyncHandler(officerBlogController.getEditorChanges)
+);
 
 /**
  * @swagger
@@ -164,7 +197,11 @@ router.get('/blogs/:id/editor-changes', asyncHandler(officerBlogController.getEd
  *             properties:
  *               approvalNote: { type: string, description: "Optional note upon accepting changes" }
  */
-router.patch('/blogs/:id/accept-editor-changes', asyncHandler(officerBlogController.acceptEditorChanges));
+router.patch(
+  '/blogs/:id/accept-editor-changes',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN),
+  asyncHandler(officerBlogController.acceptEditorChanges)
+);
 
 // ─── Notifications & Alerts ────────────────────────────────────────────────────
 
@@ -177,7 +214,11 @@ router.patch('/blogs/:id/accept-editor-changes', asyncHandler(officerBlogControl
  *     security:
  *       - bearerAuth: []
  */
-router.get('/notifications', asyncHandler(officerBlogController.getOfficerNotifications));
+router.get(
+  '/notifications',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN, ROLES.EDITOR),
+  asyncHandler(officerBlogController.getOfficerNotifications)
+);
 
 /**
  * @swagger
@@ -193,7 +234,11 @@ router.get('/notifications', asyncHandler(officerBlogController.getOfficerNotifi
  *         required: true
  *         schema: { type: string }
  */
-router.patch('/notifications/:id/read', asyncHandler(officerBlogController.markNotificationRead));
+router.patch(
+  '/notifications/:id/read',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN, ROLES.EDITOR),
+  asyncHandler(officerBlogController.markNotificationRead)
+);
 
 // ─── User Review (External Contributors Oversight) ───────────────────────────
 
@@ -206,7 +251,11 @@ router.patch('/notifications/:id/read', asyncHandler(officerBlogController.markN
  *     security:
  *       - bearerAuth: []
  */
-router.get('/users', asyncHandler(userController.listUsers));
+router.get(
+  '/users',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN),
+  asyncHandler(userController.listUsers)
+);
 
 /**
  * @swagger
@@ -217,7 +266,11 @@ router.get('/users', asyncHandler(userController.listUsers));
  *     security:
  *       - bearerAuth: []
  */
-router.get('/users/review-queue', asyncHandler(userController.getUserReviewQueue));
+router.get(
+  '/users/review-queue',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN),
+  asyncHandler(userController.getUserReviewQueue)
+);
 
 /**
  * @swagger
@@ -233,7 +286,11 @@ router.get('/users/review-queue', asyncHandler(userController.getUserReviewQueue
  *         required: true
  *         schema: { type: string }
  */
-router.get('/users/:id', asyncHandler(userController.getUserById));
+router.get(
+  '/users/:id',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN),
+  asyncHandler(userController.getUserById)
+);
 
 /**
  * @swagger
@@ -249,6 +306,10 @@ router.get('/users/:id', asyncHandler(userController.getUserById));
  *         required: true
  *         schema: { type: string }
  */
-router.patch('/users/:id/review', asyncHandler(userController.reviewUser));
+router.patch(
+  '/users/:id/review',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN),
+  asyncHandler(userController.reviewUser)
+);
 
 module.exports = router;

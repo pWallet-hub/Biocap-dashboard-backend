@@ -152,35 +152,38 @@ exports.listPublishedBlogs = async (req, res) => {
 
 /**
  * GET /api/officer/published/:id
- * Single published article detail
+ * Single published or review article detail
  */
 exports.getPublishedBlogById = async (req, res) => {
-  const blog = await Blog.findOne({ _id: req.params.id, status: 'published', isDeleted: false })
+  const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false })
     .populate('originalAuthor', 'username email role firstName lastName socialHandle organizationLink')
     .populate('author', 'username email role firstName lastName socialHandle organizationLink')
     .populate('publishedBy', 'username firstName lastName')
     .populate('comments.user', 'username firstName lastName role');
 
-  if (!blog) return res.status(404).json({ error: 'Published article not found' });
+  if (!blog) return res.status(404).json({ error: 'Article not found' });
   res.json(blog);
 };
 
 /**
- * GET /api/officer/published/:id/comments
- * Fetch comments on a published article
+ * 🟢 GET /api/officer/published/:id/comments
+ * Fetch internal review notes and comments for an article
  */
 exports.getArticleComments = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false })
     .select('comments title')
-    .populate('comments.user', 'username firstName lastName role');
+    .populate('comments.user', 'username firstName lastName role email jobTitle');
 
   if (!blog) return res.status(404).json({ error: 'Article not found' });
-  res.json(blog.comments || []);
+
+  // Filter out deleted comments
+  const activeComments = (blog.comments || []).filter((c) => c && !c.isDeleted);
+  res.json(activeComments);
 };
 
 /**
- * POST /api/officer/published/:id/comments
- * Add comment to a published article and notify team
+ * 🟢 POST /api/officer/published/:id/comments
+ * Add an internal review note to an article and alert team
  */
 exports.addArticleComment = async (req, res) => {
   const { content } = req.body;
@@ -191,15 +194,25 @@ exports.addArticleComment = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
   if (!blog) return res.status(404).json({ error: 'Article not found' });
 
+  const authorName = `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.username;
+
   const newComment = {
-    user: req.user.id,
+    name: authorName,
+    email: req.user.email || '',
+    role: req.user.role,
+    user: req.user.id || req.user._id,
     content: content.trim(),
+    isVisible: true,
+    isDeleted: false,
+    replies: [],
     createdAt: new Date(),
   };
 
   if (!blog.comments) blog.comments = [];
   blog.comments.push(newComment);
   await blog.save();
+
+  const createdComment = blog.comments[blog.comments.length - 1];
 
   // Notify Editors, Admins, and Officers
   if (Notification) {
@@ -213,7 +226,7 @@ exports.addArticleComment = async (req, res) => {
       recipient: rev._id,
       sender: req.user.id,
       type: 'ARTICLE_COMMENT',
-      message: `${req.user.role === 'communication_officer' ? 'Communication Officer' : 'Team Member'} commented on story: "${blog.title}"`,
+      message: `${authorName} (${req.user.role}) added a review note on story: "${blog.title}"`,
       article: blog._id,
     }));
 
@@ -222,14 +235,15 @@ exports.addArticleComment = async (req, res) => {
     }
   }
 
-  await writeAuditLog({
-    user: req.user.id,
-    action: 'ADD_PUBLISHED_COMMENT',
-    resource: 'Blog',
-    resourceId: blog._id,
+  writeAuditLog({
+    req,
+    action: 'blog.comment_add',
+    targetModel: 'Blog',
+    targetId: blog._id,
+    targetLabel: blog.title,
   });
 
-  res.status(201).json({ message: 'Comment posted successfully', comment: newComment });
+  res.status(201).json({ message: 'Comment posted successfully', comment: createdComment });
 };
 
 /**
@@ -276,11 +290,12 @@ exports.acceptEditorChanges = async (req, res) => {
     );
   }
 
-  await writeAuditLog({
-    user: req.user.id,
-    action: 'ACCEPT_EDITOR_CHANGES',
-    resource: 'Blog',
-    resourceId: blog._id,
+  writeAuditLog({
+    req,
+    action: 'blog.accept_editor_changes',
+    targetModel: 'Blog',
+    targetId: blog._id,
+    targetLabel: blog.title,
   });
 
   res.json({ message: 'Editor changes accepted successfully', blog });

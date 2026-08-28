@@ -76,9 +76,24 @@ router.get('/public/slug/:slug', asyncHandler(blogController.getPublicBlogBySlug
 /**
  * @swagger
  * /api/blogs/public/{slug}/comments:
+ *   get:
+ *     summary: Get public audience comments for a published blog
+ *     tags: [Blogs]
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: List of public comments }
  *   post:
  *     summary: Add a public comment or reply to a published blog
  *     tags: [Blogs]
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema: { type: string }
  *     requestBody:
  *       required: true
  *       content:
@@ -95,10 +110,8 @@ router.get('/public/slug/:slug', asyncHandler(blogController.getPublicBlogBySlug
  *     responses:
  *       201: { description: Comment posted }
  */
-router.post('/public/:slug/comments', asyncHandler(blogController.addPublicComment));
-
-// Corrected GET public comments endpoint
 router.get('/public/:slug/comments', asyncHandler(blogController.getPublicComments || blogController.getPublicBlogBySlug));
+router.post('/public/:slug/comments', asyncHandler(blogController.addPublicComment));
 
 // ─── Comment Moderation Routes ────────────────────────────────────────────────
 
@@ -169,6 +182,48 @@ router.patch('/:id/comments/:commentId/unhide', protect, authorize(...REVIEWERS)
 router.delete('/:id/comments/:commentId', protect, authorize(...REVIEWERS), asyncHandler(blogController.deleteComment));
 
 router.patch('/:id/consent', protect, asyncHandler(blogController.respondToEditorConsent));
+
+// ─── Internal Revision Notes & Editorial Discussion Routes ────────────────────
+
+/**
+ * @swagger
+ * /api/blogs/{id}/comments:
+ *   get:
+ *     summary: Get internal review notes for a story (Owner or Reviewers)
+ *     tags: [Blogs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: List of internal review notes }
+ *   post:
+ *     summary: Post an internal revision note or feedback on a story
+ *     tags: [Blogs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [content]
+ *             properties:
+ *               content: { type: string }
+ *     responses:
+ *       201: { description: Internal review note added }
+ */
+router.get('/:id/comments', protect, asyncHandler(blogController.getArticleComments));
+router.post('/:id/comments', protect, asyncHandler(blogController.addInternalReviewNote || blogController.addArticleComment));
 
 // ─── Authenticated list / stats ────────────────────────────────────────────────
 
@@ -434,6 +489,37 @@ router.delete('/:id/hard-delete', protect, adminOnly, asyncHandler(blogControlle
  *       403: { description: Not your blog }
  */
 router.patch('/:id/submit', protect, authorize(...CREATORS), asyncHandler(blogController.submitBlog));
+
+/**
+ * @swagger
+ * /api/blogs/{id}/change-implemented:
+ *   patch:
+ *     summary: Mark a requested edit/change request as implemented by the story author
+ *     tags: [Blogs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               changeId: { type: string }
+ *               implementationNote: { type: string }
+ *     responses:
+ *       200: { description: Change request marked as implemented }
+ *       404: { description: Blog not found }
+ */
+router.patch(
+  '/:id/change-implemented',
+  protect,
+  asyncHandler(blogController.markChangeImplemented)
+);
 
 /**
  * @swagger

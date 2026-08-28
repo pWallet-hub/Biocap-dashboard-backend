@@ -108,7 +108,7 @@ const findCommentById = (blog, commentId) => {
   return null;
 };
 
-// ─── Public Endpoints (No Auth) ───────────────────────────────────────────────
+// ─── Public Endpoints (No Auth Required) ───────────────────────────────────────
 
 exports.getPublicBlogs = async (req, res, next) => {
   try {
@@ -206,6 +206,9 @@ exports.getPublicBlogBySlug = async (req, res, next) => {
   }
 };
 
+/**
+ * 🟢 PUBLIC AUDIENCE COMMENTS (For website visitors on published articles)
+ */
 exports.addPublicComment = async (req, res, next) => {
   try {
     const { slug } = req.params;
@@ -262,7 +265,7 @@ exports.addPublicComment = async (req, res, next) => {
             recipient: reviewer._id,
             sender: req.user?._id || null,
             type: 'ARTICLE_COMMENT',
-            message: `New comment on "${blog.title}" from ${payload.name}.`,
+            message: `New public comment on "${blog.title}" from ${payload.name}.`,
             article: blog._id,
           }));
           await Notification.insertMany(notifications);
@@ -272,6 +275,142 @@ exports.addPublicComment = async (req, res, next) => {
       }
     });
 
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ─── Internal Editorial Review Notes & Revision Discussions ─────────────────
+
+/**
+ * 🟢 GET INTERNAL ARTICLE COMMENTS / REVISION NOTES
+ * Allows Editors, Officers, Admins, and story authors/creators to view review notes.
+ */
+exports.getArticleComments = async (req, res, next) => {
+  try {
+    const blogId = req.params.articleId || req.params.id;
+    const blog = await Blog.findOne({ _id: blogId, isDeleted: false })
+      .populate('comments.user', 'firstName lastName username email role jobTitle')
+      .populate('comments.replies.user', 'firstName lastName username email role jobTitle')
+      .lean();
+
+    if (!blog) return res.status(404).json({ error: 'Blog not found' });
+
+    const isOwner =
+      (blog.originalAuthor && blog.originalAuthor.toString() === req.user.id) ||
+      (blog.author && blog.author.toString() === req.user.id);
+
+    if (!isReviewer(req.user.role) && !isOwner) {
+      return res.status(403).json({ error: 'Forbidden: Insufficient permissions to view review notes.' });
+    }
+
+    const activeComments = (blog.comments || []).filter((c) => c && !c.isDeleted);
+    res.json(activeComments);
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * 🟢 POST INTERNAL REVISION NOTE / EDITORIAL DISCUSSION
+ * Allows reviewers or authors to communicate change requests before publishing.
+ */
+exports.addInternalReviewNote = async (req, res, next) => {
+  try {
+    const blogId = req.params.articleId || req.params.id;
+    const { content } = req.body || {};
+
+    if (!content?.trim()) {
+      return res.status(400).json({ error: 'Note content is required.' });
+    }
+
+    const blog = await Blog.findOne({ _id: blogId, isDeleted: false });
+    if (!blog) return res.status(404).json({ error: 'Blog not found' });
+
+    const isOwner =
+      (blog.originalAuthor && blog.originalAuthor.toString() === req.user.id) ||
+      (blog.author && blog.author.toString() === req.user.id);
+
+    if (!isReviewer(req.user.role) && !isOwner) {
+      return res.status(403).json({ error: 'Forbidden: Cannot post internal notes on this story.' });
+    }
+
+    const notePayload = {
+      name: `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim() || req.user.username,
+      email: req.user.email,
+      role: req.user.role,
+      user: req.user.id,
+      content: content.trim(),
+      isVisible: true,
+      isDeleted: false,
+      replies: [],
+      createdAt: new Date(),
+    };
+
+    blog.comments.push(notePayload);
+    await blog.save();
+
+    const createdNote = blog.comments[blog.comments.length - 1];
+    res.status(201).json({ message: 'Internal review note added successfully', comment: createdNote });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * 🟢 MARK CHANGE REQUEST AS IMPLEMENTED (Fixes 404 Error on Mark Button)
+ */
+exports.markChangeImplemented = async (req, res, next) => {
+  try {
+    const { changeId, implementationNote } = req.body || {};
+    const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
+
+    if (!blog) {
+      return res.status(404).json({ error: 'Blog story not found' });
+    }
+
+    const isOwner =
+      (blog.originalAuthor && blog.originalAuthor.toString() === req.user.id) ||
+      (blog.author && blog.author.toString() === req.user.id);
+
+    if (!isReviewer(req.user.role) && !isOwner) {
+      return res.status(403).json({ error: 'Forbidden: You can only update your own story changes.' });
+    }
+
+    // Search and update changeRequests array
+    if (Array.isArray(blog.changeRequests) && blog.changeRequests.length > 0) {
+      if (changeId) {
+        const item = blog.changeRequests.id(changeId);
+        if (item) {
+          item.implemented = true;
+          item.implementedAt = new Date();
+          if (implementationNote) item.implementationNote = implementationNote;
+        }
+      } else {
+        // Fallback: Mark latest open change request as implemented
+        const lastIdx = blog.changeRequests.length - 1;
+        blog.changeRequests[lastIdx].implemented = true;
+        blog.changeRequests[lastIdx].implementedAt = new Date();
+        if (implementationNote) {
+          blog.changeRequests[lastIdx].implementationNote = implementationNote;
+        }
+      }
+    }
+
+    await blog.save();
+
+    writeAuditLog({
+      req,
+      action: 'blog.mark_change_implemented',
+      targetModel: 'Blog',
+      targetId: blog._id,
+      targetLabel: blog.title,
+    });
+
+    res.json({
+      message: 'Change request marked as implemented successfully',
+      blog,
+    });
   } catch (error) {
     next(error);
   }
@@ -501,7 +640,6 @@ exports.createBlog = async (req, res) => {
   const bodyData = req.parsedBody || req.body || {};
   let { title, tag, excerpt, excerptBlocks, socialHandle, organizationLink, modal, blocks, bodyHtml, img: bodyImgUrl } = bodyData;
 
-  // 🟢 High-Performance Fix: Accepts both Direct Cloudinary Image URL (JSON) or Multipart File Upload
   const coverImageUrl = imgFile ? imgFile.path : (typeof bodyImgUrl === 'string' && bodyImgUrl.trim() ? bodyImgUrl.trim() : null);
 
   if (!coverImageUrl) {
@@ -638,7 +776,6 @@ exports.updateBlog = async (req, res) => {
   const imgFile = req.files?.img?.[0] || req.file;
   const docFile = req.files?.document?.[0];
 
-  // 🟢 High-Performance Fix: Allows updating cover image via Direct Cloudinary URL string
   if (imgFile) {
     destroyAsset(blog.imgPublicId, 'image');
     blog.img = imgFile.path;
