@@ -9,6 +9,7 @@ const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
 const connectDB = require('./config/db');
 const uploadRoutes = require('./routes/upload');
+const galleryRoutes = require('./routes/gallery');
 
 // Load environment variables
 dotenv.config();
@@ -108,6 +109,10 @@ const swaggerOptions = {
       {
         name: 'Blogs',
         description: 'Public and member blog operations',
+      },
+      {
+        name: 'Gallery',
+        description: 'Media management endpoints for HD video and image folder collections',
       },
       {
         name: 'Admin Management',
@@ -226,6 +231,33 @@ const swaggerOptions = {
             content: { type: 'string', example: 'This is a well-researched publication on agricultural resilience.' },
             isVisible: { type: 'boolean', example: true },
             createdAt: { type: 'string', format: 'date-time', example: '2026-02-12T08:20:00.000Z' },
+          },
+        },
+
+        // --- Gallery Domain ---
+        GalleryItem: {
+          type: 'object',
+          required: ['_id', 'mediaType', 'title', 'category', 'caption'],
+          properties: {
+            _id: { type: 'string', example: '66d445566778899001122334' },
+            mediaType: { type: 'string', enum: ['folder', 'video'], example: 'folder' },
+            title: { type: 'string', example: 'RAB Rubona Cassava Field Trials' },
+            category: { type: 'string', enum: ['events', 'team', 'activities'], example: 'activities' },
+            caption: { type: 'string', example: 'Field evaluation of virus-resistant cassava strains in Huye.' },
+            videoUrl: { type: 'string', format: 'uri', example: 'https://res.cloudinary.com/biocap/video/upload/v1/sample.mp4' },
+            thumbnailUrl: { type: 'string', format: 'uri', example: 'https://res.cloudinary.com/biocap/image/upload/v1/thumb.jpg' },
+            images: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  url: { type: 'string', format: 'uri' },
+                  publicId: { type: 'string' },
+                },
+              },
+            },
+            createdBy: { $ref: '#/components/schemas/User' },
+            createdAt: { type: 'string', format: 'date-time', example: '2026-03-01T11:00:00.000Z' },
           },
         },
 
@@ -352,6 +384,7 @@ const blogRouter = require('./routes/blog');
 // Primary App Mount Points
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/blogs', blogRouter);
+app.use('/api/gallery', galleryRoutes);
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/officer', require('./routes/officer'));
 

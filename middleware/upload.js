@@ -56,7 +56,7 @@ const upload = multer({
 const uploadBlogFiles = upload.fields([
   { name: 'img', maxCount: 1 },        // Cover Image
   { name: 'images', maxCount: 100 },   // Inline Section Images
-  { name: 'document', maxCount: 1 },   // PDF Document
+  { name: 'document', maxCount: 1 },   // PDF Do
 ]);
 
 module.exports = {
