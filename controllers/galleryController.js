@@ -92,6 +92,34 @@ const purgeCloudinaryAssets = async (item) => {
   }
 };
 
+/**
+ * Normalises the publish state on an item before sending it to the client.
+ * Items created before the `isPublished` field existed have no value in
+ * MongoDB, so they are treated as published (only an explicit `false`
+ * means hidden). Also adds a `status` string for convenience.
+ */
+const withPublishState = (item) => {
+  const plain = typeof item.toObject === 'function' ? item.toObject() : item;
+  const isPublished = plain.isPublished !== false;
+  return { ...plain, isPublished, status: isPublished ? 'published' : 'draft' };
+};
+
+/**
+ * Shared query builder for list endpoints (category, mediaType, search).
+ */
+const buildListQuery = ({ category, mediaType, search }) => {
+  const query = {};
+  if (category && category !== 'all') query.category = category;
+  if (mediaType && mediaType !== 'all') query.mediaType = mediaType;
+  if (search) {
+    query.$or = [
+      { title: { $regex: search, $options: 'i' } },
+      { caption: { $regex: search, $options: 'i' } },
+    ];
+  }
+  return query;
+};
+
 // ─── CREATE ──────────────────────────────────────────────────────────────────
 /**
  * @desc   Create new Gallery entry (Folder Collection or Video)
@@ -134,6 +162,8 @@ exports.createGalleryItem = async (req, res) => {
         caption: caption.trim(),
         videoUrl: req.files.video[0].path,
         thumbnailUrl: req.files.thumbnail[0].path,
+        isPublished: true,
+        publishedAt: new Date(),
         createdBy: req.user.id,
       });
 
@@ -143,7 +173,7 @@ exports.createGalleryItem = async (req, res) => {
         success: true,
         message: 'Video entry published successfully.',
         shareableUrl: `${req.protocol}://${req.get('host')}/gallery/item/${newVideo._id}`,
-        data: newVideo,
+        data: withPublishState(newVideo),
       });
     }
 
@@ -188,6 +218,8 @@ exports.createGalleryItem = async (req, res) => {
         category,
         caption: caption.trim(),
         images: uploadedImages,
+        isPublished: true,
+        publishedAt: new Date(),
         createdBy: req.user.id,
       });
 
@@ -197,7 +229,7 @@ exports.createGalleryItem = async (req, res) => {
         success: true,
         message: 'Folder collection published successfully.',
         shareableUrl: `${req.protocol}://${req.get('host')}/gallery/item/${newFolder._id}`,
-        data: newFolder,
+        data: withPublishState(newFolder),
       });
     }
 
@@ -208,9 +240,11 @@ exports.createGalleryItem = async (req, res) => {
   }
 };
 
-// ─── READ ALL (PAGINATED & FILTERED) ────────────────────────────────────────
+// ─── READ ALL — PUBLIC WEBSITE (PUBLISHED ONLY) ─────────────────────────────
 /**
- * @desc   Get paginated gallery items with optional search & category filter
+ * @desc   Get paginated PUBLISHED gallery items with optional search & category filter.
+ *         Unpublished (draft) items are never returned here, so unpublishing
+ *         an item removes it from the public website gallery.
  * @route  GET /api/gallery
  * @access Public
  */
@@ -218,17 +252,11 @@ exports.getGalleryItems = async (req, res) => {
   try {
     const page = parseInt(req.query.page, 10) || 1;
     const limit = parseInt(req.query.limit, 10) || 12;
-    const { category, mediaType, search } = req.query;
 
-    const query = {};
-    if (category && category !== 'all') query.category = category;
-    if (mediaType && mediaType !== 'all') query.mediaType = mediaType;
-    if (search) {
-      query.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { caption: { $regex: search, $options: 'i' } },
-      ];
-    }
+    const query = buildListQuery(req.query);
+    // Only an explicit `false` is hidden. Legacy items that have no
+    // isPublished field yet stay visible until they are unpublished.
+    query.isPublished = { $ne: false };
 
     const total = await Gallery.countDocuments(query);
     const items = await Gallery.find(query)
@@ -247,7 +275,7 @@ exports.getGalleryItems = async (req, res) => {
         page,
         pages: Math.ceil(total / limit),
       },
-      data: items,
+      data: items.map(withPublishState),
     });
   } catch (error) {
     console.error('Get Gallery Items Error:', error);
@@ -255,9 +283,49 @@ exports.getGalleryItems = async (req, res) => {
   }
 };
 
+// ─── READ ALL — ADMIN DASHBOARD (PUBLISHED + DRAFTS) ────────────────────────
+/**
+ * @desc   Get paginated gallery items INCLUDING unpublished drafts,
+ *         for the admin dashboard.
+ * @route  GET /api/gallery/admin/list
+ * @access Private (Admin & Editor only)
+ */
+exports.getAdminGalleryItems = async (req, res) => {
+  try {
+    const page = parseInt(req.query.page, 10) || 1;
+    const limit = parseInt(req.query.limit, 10) || 50;
+
+    const query = buildListQuery(req.query);
+
+    const total = await Gallery.countDocuments(query);
+    const items = await Gallery.find(query)
+      .select('-__v')
+      .populate('createdBy', 'username role')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      count: items.length,
+      pagination: {
+        total,
+        page,
+        pages: Math.ceil(total / limit),
+      },
+      data: items.map(withPublishState),
+    });
+  } catch (error) {
+    console.error('Get Admin Gallery Items Error:', error);
+    return res.status(500).json({ success: false, message: 'Error retrieving gallery items.' });
+  }
+};
+
 // ─── READ SINGLE BY ID ───────────────────────────────────────────────────────
 /**
- * @desc   Get single gallery item (For permalink views and direct sharing)
+ * @desc   Get single PUBLISHED gallery item (For permalink views and direct sharing).
+ *         Unpublished items return 404 so their links stop working too.
  * @route  GET /api/gallery/:id
  * @access Public
  */
@@ -267,13 +335,70 @@ exports.getGalleryItemById = async (req, res) => {
       .select('-__v')
       .populate('createdBy', 'username role');
 
+    if (!item || item.isPublished === false) {
+      return res.status(404).json({ success: false, message: 'Gallery item not found.' });
+    }
+
+    return res.status(200).json({ success: true, data: withPublishState(item) });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Invalid ID format or server error.' });
+  }
+};
+
+// ─── PUBLISH / UNPUBLISH ─────────────────────────────────────────────────────
+/**
+ * @desc   Make a gallery item visible on the public website
+ * @route  PATCH /api/gallery/:id/publish
+ * @access Private (Admin & Editor only)
+ */
+exports.publishGalleryItem = async (req, res) => {
+  try {
+    const item = await Gallery.findByIdAndUpdate(
+      req.params.id,
+      { $set: { isPublished: true, publishedAt: new Date() } },
+      { new: true }
+    ).populate('createdBy', 'username role');
+
     if (!item) {
       return res.status(404).json({ success: false, message: 'Gallery item not found.' });
     }
 
-    return res.status(200).json({ success: true, data: item });
+    return res.status(200).json({
+      success: true,
+      message: 'Gallery item is now visible on the website.',
+      data: withPublishState(item),
+    });
   } catch (error) {
-    return res.status(500).json({ success: false, message: 'Invalid ID format or server error.' });
+    console.error('Publish Gallery Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to publish gallery item.' });
+  }
+};
+
+/**
+ * @desc   Hide a gallery item from the public website (keeps it in the dashboard)
+ * @route  PATCH /api/gallery/:id/unpublish
+ * @access Private (Admin & Editor only)
+ */
+exports.unpublishGalleryItem = async (req, res) => {
+  try {
+    const item = await Gallery.findByIdAndUpdate(
+      req.params.id,
+      { $set: { isPublished: false, publishedAt: null } },
+      { new: true }
+    ).populate('createdBy', 'username role');
+
+    if (!item) {
+      return res.status(404).json({ success: false, message: 'Gallery item not found.' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Gallery item removed from the website.',
+      data: withPublishState(item),
+    });
+  } catch (error) {
+    console.error('Unpublish Gallery Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to unpublish gallery item.' });
   }
 };
 
@@ -366,7 +491,7 @@ exports.updateGalleryItem = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Gallery item updated successfully.',
-      data: item,
+      data: withPublishState(item),
     });
   } catch (error) {
     console.error('Update Gallery Error:', error);

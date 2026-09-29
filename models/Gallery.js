@@ -26,6 +26,18 @@ const gallerySchema = new mongoose.Schema(
       trim: true,
       maxlength: [1000, 'Caption cannot exceed 1000 characters'],
     },
+    // Website visibility. true  = visible on the public website gallery.
+    //                     false = hidden (draft), still visible in the dashboard.
+    // Defaults to true so newly uploaded items behave exactly as before.
+    isPublished: {
+      type: Boolean,
+      default: true,
+      index: true,
+    },
+    publishedAt: {
+      type: Date,
+      default: null,
+    },
     // Video Specific Fields
     videoUrl: {
       type: String,
@@ -139,7 +151,10 @@ gallerySchema.pre('validate', function () {
 // 1. Compound Index for filtered paginated queries
 gallerySchema.index({ category: 1, mediaType: 1, createdAt: -1 });
 
-// 2. Text Index for fast regex/full-text search across titles and captions
+// 2. Compound Index for the public website query (published only)
+gallerySchema.index({ isPublished: 1, category: 1, mediaType: 1, createdAt: -1 });
+
+// 3. Text Index for fast regex/full-text search across titles and captions
 gallerySchema.index({ title: 'text', caption: 'text' });
 
 module.exports = mongoose.model('Gallery', gallerySchema);

@@ -6,8 +6,11 @@ const { uploadGalleryFiles } = require('../middleware/uploadGallery');
 const {
   createGalleryItem,
   getGalleryItems,
+  getAdminGalleryItems,
   getGalleryItemById,
   updateGalleryItem,
+  publishGalleryItem,
+  unpublishGalleryItem,
   deleteGalleryItem,
 } = require('../controllers/galleryController');
 
@@ -15,7 +18,7 @@ const {
  * @swagger
  * /api/gallery:
  *   get:
- *     summary: Fetch paginated gallery items
+ *     summary: Fetch paginated PUBLISHED gallery items (public website)
  *     tags: [Gallery]
  *     parameters:
  *       - in: query
@@ -47,15 +50,62 @@ const {
  *         description: Search keyword across titles and captions
  *     responses:
  *       200:
- *         description: Paginated gallery list returned successfully
+ *         description: Paginated gallery list returned successfully (published items only)
  */
 router.get('/', getGalleryItems);
 
 /**
  * @swagger
+ * /api/gallery/admin/list:
+ *   get:
+ *     summary: Fetch paginated gallery items including unpublished drafts (dashboard)
+ *     tags: [Gallery]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *         description: Page number
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *         description: Items per page
+ *       - in: query
+ *         name: category
+ *         schema:
+ *           type: string
+ *           enum: [all, events, team, activities]
+ *         description: Filter by category
+ *       - in: query
+ *         name: mediaType
+ *         schema:
+ *           type: string
+ *           enum: [all, folder, video]
+ *         description: Filter by media type
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Search keyword across titles and captions
+ *     responses:
+ *       200:
+ *         description: Paginated gallery list returned successfully (published and drafts)
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ */
+// IMPORTANT: must be registered BEFORE '/:id' so "admin" is not read as an id.
+router.get('/admin/list', protect, authorize(ROLES.ADMIN, ROLES.EDITOR), getAdminGalleryItems);
+
+/**
+ * @swagger
  * /api/gallery/{id}:
  *   get:
- *     summary: Get single gallery item by ID
+ *     summary: Get single published gallery item by ID
  *     tags: [Gallery]
  *     parameters:
  *       - in: path
@@ -150,6 +200,50 @@ router.use(protect, authorize(ROLES.ADMIN, ROLES.EDITOR));
  *         $ref: '#/components/responses/ForbiddenError'
  */
 router.post('/', uploadGalleryFiles, createGalleryItem);
+
+/**
+ * @swagger
+ * /api/gallery/{id}/publish:
+ *   patch:
+ *     summary: Publish a gallery item (make it visible on the website)
+ *     tags: [Gallery]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Gallery item published successfully
+ *       404:
+ *         $ref: '#/components/responses/NotFoundError'
+ */
+router.patch('/:id/publish', publishGalleryItem);
+
+/**
+ * @swagger
+ * /api/gallery/{id}/unpublish:
+ *   patch:
+ *     summary: Unpublish a gallery item (remove it from the website, keep it in the dashboard)
+ *     tags: [Gallery]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Gallery item unpublished successfully
+ *       404:
+ *         $ref: '#/components/responses/NotFoundError'
+ */
+router.patch('/:id/unpublish', unpublishGalleryItem);
 
 /**
  * @swagger
