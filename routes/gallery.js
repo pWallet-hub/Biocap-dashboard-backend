@@ -118,6 +118,27 @@ router.use(protect, authorize(ROLES.ADMIN, ROLES.EDITOR));
  *                   type: string
  *                   format: binary
  *                 description: Multiple image files (Required if mediaType is folder)
+ *               coverIndex:
+ *                 type: integer
+ *                 description: >
+ *                   0-based index (into the `images` array above) of the
+ *                   image the uploader chose as the collection cover.
+ *                   Required for mediaType=folder.
+ *               imageCaptions:
+ *                 type: string
+ *                 description: >
+ *                   JSON-stringified array of OPTIONAL per-image captions,
+ *                   same order/length as `images`
+ *                   (e.g. '["","Rubona field visit",""]').
+ *               imageReferenceIds:
+ *                 type: string
+ *                 description: >
+ *                   JSON-stringified array of client-generated per-image
+ *                   reference ids, same order/length as `images`
+ *                   (e.g. '["k3f9a1p2","a8x1n0qz"]'). Used to build the
+ *                   BioCap-<caption>-<referenceId> download filename and
+ *                   to later address one specific image (e.g. changing
+ *                   the cover). If omitted, the server generates its own.
  *     responses:
  *       201:
  *         description: Gallery item created successfully
@@ -168,6 +189,22 @@ router.post('/', uploadGalleryFiles, createGalleryItem);
  *                 items:
  *                   type: string
  *                   format: binary
+ *                 description: New images to append to an existing folder collection
+ *               imageCaptions:
+ *                 type: string
+ *                 description: >
+ *                   JSON-stringified array of OPTIONAL captions for the
+ *                   newly appended `images`, same order/length as `images`.
+ *               imageReferenceIds:
+ *                 type: string
+ *                 description: >
+ *                   JSON-stringified array of reference ids for the newly
+ *                   appended `images`, same order/length as `images`.
+ *               coverReferenceId:
+ *                 type: string
+ *                 description: >
+ *                   referenceId of an existing (or newly appended) image
+ *                   to mark as the collection's new cover.
  *     responses:
  *       200:
  *         description: Gallery item updated successfully

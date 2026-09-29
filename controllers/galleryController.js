@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const Gallery = require('../models/Gallery');
 const cloudinary = require('../config/cloudinary');
 
@@ -11,6 +12,56 @@ const getPublicIdFromUrl = (url) => {
   if (parts.length < 2) return null;
   const publicIdWithExt = parts[1].replace(/^v\d+\//, ''); // Strip version prefix (e.g. v171234/)
   return publicIdWithExt.substring(0, publicIdWithExt.lastIndexOf('.'));
+};
+
+/**
+ * Fallback reference id generator. The frontend normally sends its own
+ * client-generated referenceId per image (so it can be shown/downloaded
+ * before the item is even saved), but if a caller hits this endpoint
+ * without one (e.g. a script, or a future admin tool), we still need a
+ * stable id to store.
+ */
+const generateReferenceId = () => crypto.randomBytes(4).toString('hex'); // e.g. "a1b2c3d4"
+
+/**
+ * Safely parses the JSON-array fields the frontend sends alongside the
+ * `images` files: imageCaptions and imageReferenceIds. Both arrive as
+ * form-data string fields (JSON.stringify'd arrays), same order/length
+ * as req.files.images.
+ */
+const parseImageMetaArray = (raw) => {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    return null; // signals "invalid JSON" to the caller
+  }
+};
+
+/**
+ * Builds the `images` sub-document array for a folder collection from
+ * the uploaded files plus the optional per-image captions/reference ids
+ * and the chosen cover index.
+ */
+const buildImageDocs = (files, { captions, referenceIds, coverIndex }) => {
+  const images = files.map((img, index) => ({
+    url: img.path,
+    publicId: img.filename || getPublicIdFromUrl(img.path),
+    caption: (captions[index] && String(captions[index]).trim()) || null,
+    referenceId: referenceIds[index] || generateReferenceId(),
+    isCover: index === coverIndex,
+  }));
+
+  // Safety net: if coverIndex was missing/out of range, default to the
+  // first image so we never save a collection with zero covers (the
+  // model's pre-validate hook also catches this, but failing fast here
+  // gives a clearer picture in logs).
+  if (!images.some((img) => img.isCover)) {
+    images[0].isCover = true;
+  }
+
+  return images;
 };
 
 /**
@@ -49,7 +100,15 @@ const purgeCloudinaryAssets = async (item) => {
  */
 exports.createGalleryItem = async (req, res) => {
   try {
-    const { mediaType, title, category, caption } = req.body;
+    const {
+      mediaType,
+      title,
+      category,
+      caption,
+      coverIndex,
+      imageCaptions,
+      imageReferenceIds,
+    } = req.body;
 
     // Common Metadata Validation
     if (!mediaType || !title || !category || !caption) {
@@ -97,10 +156,31 @@ exports.createGalleryItem = async (req, res) => {
         });
       }
 
-      const uploadedImages = req.files.images.map((img) => ({
-        url: img.path,
-        publicId: img.filename || getPublicIdFromUrl(img.path),
-      }));
+      // Parse the per-image caption/reference-id arrays the frontend
+      // sends as JSON strings, same order & length as req.files.images.
+      const parsedCaptions = parseImageMetaArray(imageCaptions);
+      const parsedReferenceIds = parseImageMetaArray(imageReferenceIds);
+
+      if (parsedCaptions === null || parsedReferenceIds === null) {
+        return res.status(400).json({
+          success: false,
+          message: 'imageCaptions and imageReferenceIds must be valid JSON arrays.',
+        });
+      }
+
+      const parsedCoverIndex = Number.isInteger(Number(coverIndex)) ? Number(coverIndex) : 0;
+      if (parsedCoverIndex < 0 || parsedCoverIndex >= req.files.images.length) {
+        return res.status(400).json({
+          success: false,
+          message: 'coverIndex does not match any uploaded image.',
+        });
+      }
+
+      const uploadedImages = buildImageDocs(req.files.images, {
+        captions: parsedCaptions,
+        referenceIds: parsedReferenceIds,
+        coverIndex: parsedCoverIndex,
+      });
 
       const newFolder = new Gallery({
         mediaType: 'folder',
@@ -205,7 +285,15 @@ exports.getGalleryItemById = async (req, res) => {
  */
 exports.updateGalleryItem = async (req, res) => {
   try {
-    const { title, category, caption } = req.body;
+    const {
+      title,
+      category,
+      caption,
+      imageCaptions,
+      imageReferenceIds,
+      coverReferenceId,
+    } = req.body;
+
     const item = await Gallery.findById(req.params.id);
 
     if (!item) {
@@ -232,13 +320,45 @@ exports.updateGalleryItem = async (req, res) => {
       }
     }
 
-    // Append new images if new files are attached to a Folder collection
-    if (item.mediaType === 'folder' && req.files?.images?.length > 0) {
-      const newImages = req.files.images.map((img) => ({
-        url: img.path,
-        publicId: img.filename || getPublicIdFromUrl(img.path),
-      }));
-      item.images.push(...newImages);
+    if (item.mediaType === 'folder') {
+      // Append new images if new files are attached to a Folder collection.
+      // Newly appended images never auto-replace the existing cover —
+      // use coverReferenceId (below) to explicitly change it.
+      if (req.files?.images?.length > 0) {
+        const parsedCaptions = parseImageMetaArray(imageCaptions);
+        const parsedReferenceIds = parseImageMetaArray(imageReferenceIds);
+
+        if (parsedCaptions === null || parsedReferenceIds === null) {
+          return res.status(400).json({
+            success: false,
+            message: 'imageCaptions and imageReferenceIds must be valid JSON arrays.',
+          });
+        }
+
+        const newImages = req.files.images.map((img, index) => ({
+          url: img.path,
+          publicId: img.filename || getPublicIdFromUrl(img.path),
+          caption: (parsedCaptions[index] && String(parsedCaptions[index]).trim()) || null,
+          referenceId: parsedReferenceIds[index] || generateReferenceId(),
+          isCover: false,
+        }));
+
+        item.images.push(...newImages);
+      }
+
+      // Explicitly re-assign which image is the cover, by its referenceId.
+      if (coverReferenceId) {
+        const match = item.images.find((img) => img.referenceId === coverReferenceId);
+        if (!match) {
+          return res.status(400).json({
+            success: false,
+            message: 'coverReferenceId does not match any image in this collection.',
+          });
+        }
+        item.images.forEach((img) => {
+          img.isCover = img.referenceId === coverReferenceId;
+        });
+      }
     }
 
     await item.save();
