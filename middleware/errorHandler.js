@@ -1,4 +1,20 @@
 const errorHandler = (err, req, res, next) => {
+  if (err.name === 'MulterError') {
+    if (err.code === 'LIMIT_UNEXPECTED_FILE' && err.field === 'images') {
+      return res.status(400).json({ error: 'A gallery collection can contain at most 20 images.' });
+    }
+
+    if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+      return res.status(400).json({ error: `Unexpected upload field: ${err.field || 'unknown'}.` });
+    }
+
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'An uploaded file exceeds the server upload limit.' });
+    }
+
+    return res.status(400).json({ error: err.message || 'Invalid multipart upload.' });
+  }
+
   if (err.name === 'ValidationError') {
     return res.status(400).json({ error: err.message });
   }
