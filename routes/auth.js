@@ -11,7 +11,7 @@ const { pickProfileFields, validateRoleSpecificFields } = require('../middleware
 const { writeAuditLog } = require('../utils/auditLogger');
 const { ROLES, ALL_ROLES } = require('../constants/roles');
 
-const ACCESS_TOKEN_EXPIRES_IN = '30m';
+const ACCESS_TOKEN_EXPIRES_IN = '7d';
 const RESET_TOKEN_EXPIRES_IN = '30m';
 const PASSWORD_EXPIRY_DAYS = parseInt(process.env.PASSWORD_EXPIRY_DAYS || '90', 10);
 
