@@ -71,6 +71,21 @@ router.get('/public', asyncHandler(blogController.getPublicBlogs));
 router.get('/public/:slug', asyncHandler(blogController.getPublicBlogBySlug));
 
 // Explicit route alias matching frontend /api/blogs/public/slug/:slug calls
+/**
+ * @swagger
+ * /api/blogs/public/slug/{slug}:
+ *   get:
+ *     summary: Get a published blog by slug (public)
+ *     tags: [Blogs]
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Published blog }
+ *       404: { description: Not found or not published }
+ */
 router.get('/public/slug/:slug', asyncHandler(blogController.getPublicBlogBySlug));
 
 /**
@@ -110,7 +125,33 @@ router.get('/public/slug/:slug', asyncHandler(blogController.getPublicBlogBySlug
  *     responses:
  *       201: { description: Comment posted }
  */
-router.get('/public/:slug/comments', asyncHandler(blogController.getPublicComments || blogController.getPublicBlogBySlug));
+router.get('/public/:slug/comments', asyncHandler(blogController.getPublicComments));
+/**
+ * @swagger
+ * /api/blogs/public/{slug}/comments:
+ *   post:
+ *     summary: Post a public comment on a published blog
+ *     tags: [Blogs]
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, email, content]
+ *             properties:
+ *               name: { type: string }
+ *               email: { type: string }
+ *               content: { type: string }
+ *     responses:
+ *       201: { description: Comment posted }
+ *       404: { description: Blog not found }
+ */
 router.post('/public/:slug/comments', asyncHandler(blogController.addPublicComment));
 
 // ─── Comment Moderation Routes ────────────────────────────────────────────────
@@ -256,7 +297,34 @@ router.patch('/:id/consent', protect, asyncHandler(blogController.respondToEdito
  *       201: { description: Internal review note added }
  */
 router.get('/:id/comments', protect, asyncHandler(blogController.getArticleComments));
-router.post('/:id/comments', protect, asyncHandler(blogController.addInternalReviewNote || blogController.addArticleComment));
+/**
+ * @swagger
+ * /api/blogs/{id}/comments:
+ *   post:
+ *     summary: Add an internal review note to a blog
+ *     description: Visible to reviewers only. Used for editorial discussion before publishing.
+ *     tags: [Blogs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [content]
+ *             properties:
+ *               content: { type: string }
+ *     responses:
+ *       201: { description: Note added }
+ *       404: { description: Blog not found }
+ */
+router.post('/:id/comments', protect, asyncHandler(blogController.addInternalReviewNote));
 
 // ─── Authenticated list / stats ────────────────────────────────────────────────
 

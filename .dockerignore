@@ -1,0 +1,17 @@
+# Secrets and local config must never end up in the image
+.env
+.env.*
+!.env.example
+
+# Dependencies are installed inside the image
+node_modules
+npm-debug.log
+
+# Version control and editor files
+.git
+.gitignore
+.vscode
+.idea
+
+# Tests and local scripts are not needed at runtime
+test

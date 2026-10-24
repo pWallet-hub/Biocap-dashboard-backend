@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const userController = require('../controllers/userController');
 const officerBlogController = require('../controllers/officerBlogController');
+const editorBlogController = require('../controllers/editorBlogController');
 const blogController = require('../controllers/blogController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const asyncHandler = require('../utils/asyncHandler');
@@ -201,6 +202,32 @@ router.patch(
   '/blogs/:id/accept-editor-changes',
   authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN),
   asyncHandler(officerBlogController.acceptEditorChanges)
+);
+
+/**
+ * @swagger
+ * /api/officer/blogs/{id}/revisions:
+ *   get:
+ *     summary: Version history of editor proposals (read-only)
+ *     description: Same data as the editor's revisions view. Officers can see each proposal, its decision, and the diffs.
+ *     tags: [Communication Officer]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Proposal history and diffs
+ *       404:
+ *         description: Article not found
+ */
+router.get(
+  '/blogs/:id/revisions',
+  authorize(ROLES.COMMUNICATION_OFFICER, ROLES.ADMIN),
+  asyncHandler(editorBlogController.getEditorRevisions)
 );
 
 // ─── Notifications & Alerts ────────────────────────────────────────────────────

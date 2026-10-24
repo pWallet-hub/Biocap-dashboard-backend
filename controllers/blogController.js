@@ -14,17 +14,14 @@ const {
   sendEditorProposalDecisionEmail,
 } = require('../utils/sendEmail');
 const { htmlToBlocks } = require('../utils/htmlToBlocks');
+const { cacheGet, cacheSet, cacheDel } = require('../utils/cache');
 const { diffSnapshots, summarizeChanges } = require('../utils/editorProposal');
 
-// 🟢 High-Speed In-Memory Cache for Public News List
-let publicBlogsCache = null;
-let lastPublicCacheTime = 0;
-const PUBLIC_CACHE_TTL = 60 * 1000; // 60-second cache TTL
+// Public news list cache (page 1, no filters). Lives in Redis so every instance shares it.
+const PUBLIC_CACHE_KEY = 'cache:public-blogs:page1';
+const PUBLIC_CACHE_TTL_SECONDS = 60;
 
-const invalidatePublicBlogsCache = () => {
-  publicBlogsCache = null;
-  lastPublicCacheTime = 0;
-};
+const invalidatePublicBlogsCache = () => cacheDel(PUBLIC_CACHE_KEY);
 
 /**
  * Map uploaded files (req.files.images) into blocks or excerptBlocks.
@@ -115,11 +112,14 @@ const findCommentById = (blog, commentId) => {
 exports.getPublicBlogs = async (req, res, next) => {
   try {
     const { page, limit, skip } = parsePagination(req.query);
-    const now = Date.now();
+    const cacheable = !req.query.tag && !req.query.search && page === 1;
 
-    if (!req.query.tag && !req.query.search && page === 1 && publicBlogsCache && (now - lastPublicCacheTime < PUBLIC_CACHE_TTL)) {
-      res.setHeader('X-Cache', 'HIT');
-      return res.json(publicBlogsCache);
+    if (cacheable) {
+      const cached = await cacheGet(PUBLIC_CACHE_KEY);
+      if (cached) {
+        res.setHeader('X-Cache', 'HIT');
+        return res.json(cached);
+      }
     }
 
     const filter = { status: 'published', isDeleted: false };
@@ -164,9 +164,8 @@ exports.getPublicBlogs = async (req, res, next) => {
 
     const responsePayload = paginatedResponse(formatted, total, { page, limit });
 
-    if (!req.query.tag && !req.query.search && page === 1) {
-      publicBlogsCache = responsePayload;
-      lastPublicCacheTime = now;
+    if (cacheable) {
+      await cacheSet(PUBLIC_CACHE_KEY, responsePayload, PUBLIC_CACHE_TTL_SECONDS);
     }
 
     res.setHeader('X-Cache', 'MISS');
@@ -181,7 +180,7 @@ exports.getPublicBlogBySlug = async (req, res, next) => {
     const blog = await Blog.findOneAndUpdate(
       { slug: req.params.slug, status: 'published', isDeleted: false },
       { $inc: { views: 1 } },
-      { new: true }
+      { returnDocument: 'after' }
     )
       .populate('originalAuthor', 'firstName lastName username jobTitle socialHandle organization organizationLink')
       .populate('author', 'firstName lastName username jobTitle socialHandle organization organizationLink')
@@ -283,6 +282,39 @@ exports.addPublicComment = async (req, res, next) => {
 };
 
 // ─── Internal Editorial Review Notes & Revision Discussions ─────────────────
+
+/**
+ * GET /api/blogs/public/:slug/comments
+ * Visible comments on a published article, with their visible replies.
+ * Only the commenter's name is returned. Email and phone are never exposed.
+ */
+exports.getPublicComments = async (req, res, next) => {
+  try {
+    const blog = await Blog.findOne({ slug: req.params.slug, status: 'published', isDeleted: false })
+      .select('comments')
+      .lean();
+    if (!blog) return res.status(404).json({ error: 'Blog not found' });
+
+    const shape = (comment) => ({
+      _id: comment._id,
+      name: comment.name || 'Guest',
+      content: comment.content,
+      parentComment: comment.parentComment || null,
+      createdAt: comment.createdAt,
+    });
+
+    const visible = (comments = []) => comments.filter((c) => c.isVisible !== false && !c.isDeleted);
+
+    const comments = visible(blog.comments).map((comment) => ({
+      ...shape(comment),
+      replies: visible(comment.replies).map(shape),
+    }));
+
+    res.json({ count: comments.length, comments });
+  } catch (error) {
+    next(error);
+  }
+};
 
 /**
  * 🟢 GET INTERNAL ARTICLE COMMENTS / REVISION NOTES
@@ -551,7 +583,7 @@ exports.respondToEditorConsent = async (req, res, next) => {
       },
       { $set: set, $unset: { editorModifications: '' } },
       {
-        new: true,
+        returnDocument: 'after',
         arrayFilters: [{ 'p.version': proposal.version ?? null, 'p.status': 'pending' }],
       }
     ).select('+editorProposals');
@@ -913,7 +945,7 @@ exports.deleteBlog = async (req, res) => {
   blog.deletedBy = req.user.id;
   await blog.save();
 
-  invalidatePublicBlogsCache();
+  await invalidatePublicBlogsCache();
 
   writeAuditLog({
     req,
@@ -1139,10 +1171,10 @@ exports.publishBlog = async (req, res, next) => {
           publishedBy: req.user.id,
         },
       },
-      { new: true }
+      { returnDocument: 'after' }
     ).select('-blocks -editorModifications -bodyHtml').lean();
 
-    invalidatePublicBlogsCache();
+    await invalidatePublicBlogsCache();
 
     res.json({ message: 'Blog is now live on the website', blog });
 
@@ -1199,10 +1231,10 @@ exports.unpublishBlog = async (req, res, next) => {
     const blog = await Blog.findOneAndUpdate(
       { _id: req.params.id, isDeleted: false },
       updatePayload,
-      { new: true }
+      { returnDocument: 'after' }
     ).select('-blocks -editorModifications -bodyHtml').lean();
 
-    invalidatePublicBlogsCache();
+    await invalidatePublicBlogsCache();
 
     res.json({
       message: 'Blog removed from the public website. It is back in approved status.',

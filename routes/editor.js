@@ -232,6 +232,32 @@ router.post('/blogs', blogUploadFields, parseBlogBody, asyncHandler(blogControll
  *       404:
  *         description: Article not found
  */
+/**
+ * @swagger
+ * /api/editor/blogs/{id}/proposal:
+ *   delete:
+ *     summary: Withdraw the pending editor proposal
+ *     description: The editor who proposed the changes (or an admin) withdraws them before the writer decides. The writer is emailed.
+ *     tags: [Communication Editor]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Proposal withdrawn
+ *       403:
+ *         description: The caller did not propose these changes
+ *       404:
+ *         description: Article not found
+ *       409:
+ *         description: No pending proposal, or it changed while withdrawing
+ */
+router.delete('/blogs/:id/proposal', asyncHandler(editorBlogController.withdrawEditorProposal));
+
 router.get('/blogs/:id/revisions', asyncHandler(editorBlogController.getEditorRevisions));
 
 /**

@@ -351,6 +351,28 @@ async function sendEditorProposalDecisionEmail(email, firstName, blogTitle, { ap
   });
 }
 
+// ─── 9. Editor Proposal Withdrawn (to writer) ───────────────────────────────
+async function sendEditorProposalWithdrawnEmail(email, firstName, blogTitle, { editorName }) {
+  const html = wrapHtml(`
+    <h3 style="color: #5f6368;">Editor Changes Withdrawn, ${escapeHtml(firstName || 'there')}</h3>
+    <p>
+      <strong>${escapeHtml(editorName)}</strong> withdrew the proposed changes to your article.
+      Nothing was changed, and no decision is needed from you.
+    </p>
+
+    <div style="background: #f9f9f9; padding: 15px; border-left: 4px solid #5f6368; margin: 15px 0;">
+      <strong>Blog Title:</strong> ${escapeHtml(blogTitle)}
+    </div>
+  `);
+
+  await sendViaResend({
+    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
+    to: email,
+    subject: `Editor changes withdrawn for "${blogTitle}"`,
+    html,
+  });
+}
+
 module.exports = {
   sendCredentialsEmail,
   sendPasswordResetEmail, // ✅ Added missing export!
@@ -360,6 +382,7 @@ module.exports = {
   sendPasswordChangedEmail,
   sendEditorProposalEmail,
   sendEditorProposalDecisionEmail,
+  sendEditorProposalWithdrawnEmail,
   sendViaResend,
   escapeHtml,
 };

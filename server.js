@@ -1,6 +1,8 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
-const dotenv = require('dotenv');
+const mongoose = require('mongoose');
 const helmet = require('helmet');
 const mongoSanitize = require('express-mongo-sanitize');
 const morgan = require('morgan');
@@ -8,19 +10,36 @@ const path = require('path');
 const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
 const connectDB = require('./config/db');
+const { connectRedis, disconnectRedis, isRedisReady } = require('./config/redis');
+const { apiLimiter, initRateLimiters } = require('./middleware/rateLimiter');
 const uploadRoutes = require('./routes/upload');
 const galleryRoutes = require('./routes/gallery');
 
-// Load environment variables
-dotenv.config();
-
-// Connect to Biocap Database
-connectDB();
-
-// Initialize background event bus listener for non-blocking side effects
+// Background event bus listener for non-blocking side effects
 require('./services/blogEventListener');
 
+// Fail fast on missing configuration instead of failing later on the first request that needs it
+const requiredEnv = ['MONGO_URI', 'JWT_SECRET'];
+if (process.env.NODE_ENV === 'production') {
+  requiredEnv.push('FRONTEND_URL', 'RESEND_API_KEY', 'RESEND_FROM', 'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET');
+}
+const missingEnv = requiredEnv.filter((name) => !process.env[name]);
+if (missingEnv.length > 0) {
+  console.error(`Missing required environment variables: ${missingEnv.join(', ')}`);
+  process.exit(1);
+}
+if (process.env.NODE_ENV === 'production' && process.env.JWT_SECRET.length < 32) {
+  console.error('JWT_SECRET must be at least 32 characters in production.');
+  process.exit(1);
+}
+
 const app = express();
+
+// Behind a reverse proxy (nginx, load balancer), set TRUST_PROXY to the number of proxy hops
+// so rate limits and req.ip use the real client address.
+if (process.env.TRUST_PROXY) {
+  app.set('trust proxy', Number(process.env.TRUST_PROXY) || process.env.TRUST_PROXY);
+}
 
 // --- Security & Core Middlewares ---
 
@@ -31,21 +50,20 @@ app.use(
   })
 );
 
-app.use(morgan('dev'));
+app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 
-// Configured CORS for production and development
+// CORS allowlist. FRONTEND_URL may hold several comma-separated origins.
 const allowedOrigins = [
-  'http://localhost:3000',
-  process.env.FRONTEND_URL,
+  ...(process.env.NODE_ENV === 'production' ? [] : ['http://localhost:3000']),
+  ...(process.env.FRONTEND_URL || '').split(',').map((origin) => origin.trim()),
 ].filter(Boolean);
 
 app.use(
   cors({
     origin: function (origin, callback) {
-      if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
-        return callback(null, true);
-      }
-      return callback(null, true);
+      // Requests without an Origin header (server-to-server, curl, same-origin) are not browser CORS requests
+      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      return callback(null, false);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
@@ -348,7 +366,7 @@ const swaggerOptions = {
     },
   },
   // 🟢 5. SINGLE ROUTE PATTERN MATCHING (Prevents duplicate endpoint scanning)
-  apis: ['./routes/*.js'],
+  apis: ['./routes/*.js', './server.js'],
 };
 
 const swaggerDocs = swaggerJsdoc(swaggerOptions);
@@ -373,6 +391,42 @@ const swaggerUiOptions = {
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs, swaggerUiOptions));
 
 // --- Route Declarations & Role-Based Mount Aliases ---
+app.use('/api', apiLimiter);
+
+/**
+ * @swagger
+ * /health:
+ *   get:
+ *     summary: Liveness and dependency health
+ *     description: Returns 200 when the database is connected. Redis is optional and reported separately.
+ *     tags: [System]
+ *     responses:
+ *       200:
+ *         description: Service is up and the database is connected
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status: { type: string, example: ok }
+ *                 database: { type: string, example: up }
+ *                 redis: { type: string, enum: [up, down, disabled] }
+ *                 uptime: { type: integer, description: Seconds since start }
+ *       503:
+ *         description: The database is not connected
+ */
+app.get('/health', async (req, res) => {
+  const dbUp = mongoose.connection.readyState === 1;
+  const redisEnabled = Boolean(process.env.REDIS_URL);
+  const redisUp = redisEnabled && isRedisReady();
+  res.status(dbUp ? 200 : 503).json({
+    status: dbUp ? 'ok' : 'unavailable',
+    database: dbUp ? 'up' : 'down',
+    redis: redisEnabled ? (redisUp ? 'up' : 'down') : 'disabled',
+    uptime: Math.round(process.uptime()),
+  });
+});
+
 app.use('/api/upload', uploadRoutes);
 
 // Mount standalone signature route for direct browser uploads to Cloudinary
@@ -406,9 +460,52 @@ app.get('/', (req, res) => {
 const errorHandler = require('./middleware/errorHandler');
 app.use(errorHandler);
 
-// Start Server Listeners
+// Start: connect dependencies first, then accept traffic
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 Biocap Server spinning on port ${PORT}`);
-  console.log(`📑 Swagger Docs available at http://localhost:${PORT}/api-docs`);
+
+const start = async () => {
+  await connectDB();
+
+  if (process.env.REDIS_URL) {
+    try {
+      await connectRedis();
+      console.log('🟢 Redis connected (shared cache and rate limits)');
+    } catch (err) {
+      console.error(`Redis unavailable, using per-process fallbacks: ${err.message}`);
+    }
+  } else {
+    console.warn('Redis not configured (REDIS_URL unset): using per-process cache and rate limits');
+  }
+
+  initRateLimiters();
+
+  const server = app.listen(PORT, () => {
+    console.log(`🚀 Biocap Server spinning on port ${PORT}`);
+    console.log(`📑 Swagger Docs available at http://localhost:${PORT}/api-docs`);
+  });
+
+  // Stop accepting traffic, finish in-flight requests, then close database and Redis connections
+  const shutdown = (signal) => {
+    console.log(`${signal} received, shutting down`);
+    server.close(async () => {
+      try {
+        await disconnectRedis();
+        await mongoose.disconnect();
+      } finally {
+        process.exit(0);
+      }
+    });
+    setTimeout(() => process.exit(1), 10000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+};
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled promise rejection:', reason);
+});
+
+start().catch((err) => {
+  console.error('Failed to start server:', err.message);
+  process.exit(1);
 });

@@ -99,6 +99,18 @@ router.get('/', getGalleryItems);
  *         $ref: '#/components/responses/ForbiddenError'
  */
 // IMPORTANT: must be registered BEFORE '/:id' so "admin" is not read as an id.
+/**
+ * @swagger
+ * /api/gallery/admin/list:
+ *   get:
+ *     summary: List all gallery items, including drafts (admins and editors)
+ *     tags: [Gallery]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200: { description: Gallery items, published and draft }
+ *       401: { description: Not authorized }
+ */
 router.get('/admin/list', protect, authorize(ROLES.ADMIN, ROLES.EDITOR), getAdminGalleryItems);
 
 /**

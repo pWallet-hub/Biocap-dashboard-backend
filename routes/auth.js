@@ -629,6 +629,26 @@ router.get('/me', protect, async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/auth/me:
+ *   put:
+ *     summary: Update the signed-in user's own profile
+ *     tags: [Authentication]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             description: Only profile fields are applied; other fields are ignored
+ *     responses:
+ *       200: { description: Profile updated }
+ *       401: { description: Not authorized }
+ *       404: { description: User not found }
+ */
 router.put('/me', protect, async (req, res) => {
   try {
     const user = await User.findById(req.user.id);

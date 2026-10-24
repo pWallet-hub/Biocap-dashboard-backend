@@ -356,7 +356,7 @@ exports.publishGalleryItem = async (req, res) => {
     const item = await Gallery.findByIdAndUpdate(
       req.params.id,
       { $set: { isPublished: true, publishedAt: new Date() } },
-      { new: true }
+      { returnDocument: 'after' }
     ).populate('createdBy', 'username role');
 
     if (!item) {
@@ -384,7 +384,7 @@ exports.unpublishGalleryItem = async (req, res) => {
     const item = await Gallery.findByIdAndUpdate(
       req.params.id,
       { $set: { isPublished: false, publishedAt: null } },
-      { new: true }
+      { returnDocument: 'after' }
     ).populate('createdBy', 'username role');
 
     if (!item) {

@@ -269,13 +269,12 @@ exports.acceptEditorChanges = async (req, res) => {
 
   if (!blog) return res.status(404).json({ error: 'Article not found' });
 
-  // Apply pending editor modifications if present
+  // Editor proposals are applied only when the writer accepts them (PATCH /api/blogs/:id/consent).
+  // Applying them here would bypass the writer's decision.
   if (blog.editorModifications) {
-    if (blog.editorModifications.title) blog.title = blog.editorModifications.title;
-    if (blog.editorModifications.excerpt) blog.excerpt = blog.editorModifications.excerpt;
-    if (blog.editorModifications.blocks) blog.blocks = blog.editorModifications.blocks;
-    if (blog.editorModifications.img) blog.img = blog.editorModifications.img;
-    blog.editorModifications = undefined;
+    return res.status(409).json({
+      error: 'This editor proposal is awaiting the writer\'s decision. Officers cannot apply it.',
+    });
   }
 
   blog.officerAcceptedChanges = true;

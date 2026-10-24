@@ -127,7 +127,7 @@ const EditorProposalRecordSchema = new mongoose.Schema(
   {
     version: { type: Number, required: true },
     editor: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    status: { type: String, enum: ['pending', 'accepted', 'rejected'], default: 'pending' },
+    status: { type: String, enum: ['pending', 'accepted', 'rejected', 'withdrawn'], default: 'pending' },
     baseline: { type: ContentSnapshotSchema, required: true },
     proposal: { type: ContentSnapshotSchema, required: true },
     proposedAt: { type: Date, default: Date.now },

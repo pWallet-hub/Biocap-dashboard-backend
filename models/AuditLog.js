@@ -35,6 +35,7 @@ const AuditLogSchema = new mongoose.Schema(
         'blog.editor_proposal',          // editor proposed a new version
         'blog.editor_changes_accepted',  // writer accepted an editor proposal
         'blog.editor_changes_rejected',  // writer rejected an editor proposal
+        'blog.editor_proposal_withdrawn', // editor withdrew a pending proposal
 
         // User actions
         'user.create',

@@ -189,7 +189,7 @@ exports.changeUserRole = async (req, res) => {
 exports.deactivateUser = async (req, res) => {
   assertNotSelf(req.params.id, req.user.id, 'deactivate');
 
-  const user = await User.findByIdAndUpdate(req.params.id, { isActive: false }, { new: true }).select('-password -refreshToken');
+  const user = await User.findByIdAndUpdate(req.params.id, { isActive: false }, { returnDocument: 'after' }).select('-password -refreshToken');
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   writeAuditLog({
@@ -204,7 +204,7 @@ exports.deactivateUser = async (req, res) => {
 };
 
 exports.reactivateUser = async (req, res) => {
-  const user = await User.findByIdAndUpdate(req.params.id, { isActive: true }, { new: true }).select('-password -refreshToken');
+  const user = await User.findByIdAndUpdate(req.params.id, { isActive: true }, { returnDocument: 'after' }).select('-password -refreshToken');
   if (!user) return res.status(404).json({ error: 'User not found' });
 
   writeAuditLog({

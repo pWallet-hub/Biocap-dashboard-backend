@@ -3,7 +3,8 @@ const User = require('../models/User');
 const { writeAuditLog } = require('../utils/auditLogger');
 const { htmlToBlocks } = require('../utils/htmlToBlocks');
 const { snapshotOf, diffSnapshots, summarizeChanges } = require('../utils/editorProposal');
-const { sendEditorProposalEmail } = require('../utils/sendEmail');
+const { ROLES } = require('../constants/roles');
+const { sendEditorProposalEmail, sendEditorProposalWithdrawnEmail } = require('../utils/sendEmail');
 
 const PENDING_PROPOSAL_MESSAGE = "An editor proposal is already awaiting the writer's decision.";
 
@@ -112,7 +113,7 @@ exports.updateBlogByEditor = async (req, res, next) => {
           },
         },
       },
-      { new: true }
+      { returnDocument: 'after' }
     ).select('+editorProposals');
 
     if (!updated) {
@@ -237,6 +238,92 @@ exports.getEditorRevisionForWriter = async (req, res, next) => {
       baseline: latest.baseline,
       proposal: latest.proposal,
       changes: diffSnapshots(latest.baseline, latest.proposal),
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * DELETE /api/editor/blogs/:id/proposal
+ * The editor who proposed the pending changes (or an admin) withdraws them before the writer decides.
+ */
+exports.withdrawEditorProposal = async (req, res, next) => {
+  try {
+    const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false }).select('+editorProposals');
+    if (!blog) return res.status(404).json({ error: 'Article not found' });
+
+    if (blog.publishConsentStatus !== 'pending' || !blog.editorModifications) {
+      return res.status(409).json({ error: 'No pending editor proposal to withdraw.' });
+    }
+
+    const isAdmin = req.user.role === ROLES.ADMIN;
+    if (!isAdmin && blog.editorModifications.editor?.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'Only the editor who proposed these changes can withdraw them.' });
+    }
+
+    const proposal = blog.editorModifications.toObject();
+    const now = new Date();
+
+    // Conditional write, same guard as the writer's decision: fails if the proposal was already decided or replaced.
+    const updated = await Blog.findOneAndUpdate(
+      {
+        _id: blog._id,
+        isDeleted: false,
+        publishConsentStatus: 'pending',
+        'editorModifications.modifiedAt': proposal.modifiedAt,
+      },
+      {
+        $set: {
+          publishConsentStatus: 'not_required',
+          publishConsentNote: 'Editor proposal withdrawn.',
+          publishConsentBy: req.user.id,
+          'editorProposals.$[p].status': 'withdrawn',
+          'editorProposals.$[p].decidedAt': now,
+          'editorProposals.$[p].decidedBy': req.user.id,
+          'editorProposals.$[p].decisionNote': 'Withdrawn by the editor.',
+        },
+        $unset: { editorModifications: '' },
+      },
+      {
+        returnDocument: 'after',
+        arrayFilters: [{ 'p.version': proposal.version ?? null, 'p.status': 'pending' }],
+      }
+    ).select('+editorProposals');
+
+    if (!updated) {
+      return res.status(409).json({ error: 'The proposal changed while withdrawing. Reload and try again.' });
+    }
+
+    res.json({ message: 'Editor proposal withdrawn. The writer has been notified.', blog: updated });
+
+    setImmediate(async () => {
+      try {
+        const editor = await User.findById(req.user.id).select('firstName lastName username');
+        const editorName =
+          [editor?.firstName, editor?.lastName].filter(Boolean).join(' ') || editor?.username || 'The editor';
+
+        const writers = await User.find({
+          _id: { $in: [updated.originalAuthor, updated.author] },
+        }).select('email firstName');
+
+        await Promise.allSettled(
+          writers
+            .filter((writer) => writer.email)
+            .map((writer) => sendEditorProposalWithdrawnEmail(writer.email, writer.firstName, updated.title, { editorName }))
+        );
+
+        writeAuditLog({
+          req,
+          action: 'blog.editor_proposal_withdrawn',
+          targetModel: 'Blog',
+          targetId: updated._id,
+          targetLabel: updated.title,
+          detail: { version: proposal.version ?? null },
+        });
+      } catch (asyncErr) {
+        console.error('Non-blocking withdraw email/audit failed:', asyncErr.message);
+      }
     });
   } catch (error) {
     next(error);
