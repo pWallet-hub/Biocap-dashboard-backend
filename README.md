@@ -44,7 +44,7 @@ The server refuses to start when a required variable is missing.
 ## Running with Docker
 
 ```bash
-docker compose up -d --build     # API on :5000, MongoDB, Redis
+docker compose up -d --build     # API on :5000 and Redis (MongoDB is the URL in MONGO_URI)
 curl http://localhost:5000/health
 ```
 

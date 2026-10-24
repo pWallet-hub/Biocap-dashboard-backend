@@ -1,5 +1,5 @@
-# Local or single-host stack: API, MongoDB, and Redis.
-# Secrets come from .env (copy .env.example). Connection URLs below point at the compose network.
+# API and Redis. MongoDB is not part of this stack: the API connects to the URL in MONGO_URI (from .env).
+# Secrets come from .env (copy .env.example).
 services:
   api:
     build: .
@@ -7,27 +7,13 @@ services:
     environment:
       NODE_ENV: production
       PORT: 5000
-      MONGO_URI: mongodb://mongo:27017/biocap_db
       REDIS_URL: redis://redis:6379
       TRUST_PROXY: 1
     ports:
       - "5000:5000"
     depends_on:
-      mongo:
-        condition: service_healthy
       redis:
         condition: service_healthy
-    restart: unless-stopped
-
-  mongo:
-    image: mongo:7
-    volumes:
-      - mongo-data:/data/db
-    healthcheck:
-      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
     restart: unless-stopped
 
   redis:
@@ -43,5 +29,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  mongo-data:
   redis-data:
