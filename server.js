@@ -145,7 +145,7 @@ const swaggerOptions = {
     // SERVER_URL overrides this when the API is reached through a different public address.
     servers: [
       {
-        url: process.env.SERVER_URL || '/',
+        url: process.env.SERVER_URL || 'https://biocapapi.afs-rwanda.org',
         description: 'This server',
       },
       ...(process.env.NODE_ENV === 'production'
