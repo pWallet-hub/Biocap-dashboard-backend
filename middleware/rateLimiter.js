@@ -1,52 +1,35 @@
 const rateLimit = require('express-rate-limit');
-const { RedisStore } = require('rate-limit-redis');
-const { getRedis, isRedisReady } = require('../config/redis');
 
-// Counters live in Redis when REDIS_URL is set, so limits hold across instances.
-// Without it they fall back to per-process memory.
-// passOnStoreError: a Redis outage lets requests through instead of failing them.
-// Limiters are created once by initRateLimiters(), which server.js calls after Redis connects.
-const makeStore = (name) => {
-  // Only use Redis if it is connected when the limiter is created. Otherwise use the per-process store.
-  if (!isRedisReady()) return undefined;
-  const redis = getRedis();
-  return new RedisStore({
-    prefix: `rl:${name}:`,
-    sendCommand: (...args) => redis.sendCommand(args),
-  });
-};
+// Counters are kept in process memory. With several instances, each instance counts separately,
+// so the effective limit is multiplied by the number of instances. Run one instance, or put the limit at the proxy.
 
-let apiLimit = null;
-let authLimit = null;
+/**
+ * General API limiter, applied to every /api route.
+ * Default 1000 requests per 15 minutes per IP (override with API_RATE_LIMIT_MAX).
+ * The default is high because staff often share one office IP.
+ */
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: Number(process.env.API_RATE_LIMIT_MAX) || 1000,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: {
+    error: 'Too many requests from this IP. Please wait 15 minutes before trying again.',
+  },
+});
 
-const initRateLimiters = () => {
-  apiLimit = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: Number(process.env.API_RATE_LIMIT_MAX) || 1000, // high default: staff often share one office IP
-    standardHeaders: 'draft-7',
-    legacyHeaders: false,
-    passOnStoreError: true,
-    store: makeStore('api'),
-    message: {
-      error: 'Too many requests from this IP. Please wait 15 minutes before trying again.',
-    },
-  });
+/**
+ * Strict limiter for auth-sensitive endpoints (login, registration, password reset).
+ * 10 attempts per 15 minutes per IP.
+ */
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  message: {
+    error: 'Too many authentication attempts. Please wait 15 minutes before trying again.',
+  },
+});
 
-  authLimit = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    limit: 10,
-    standardHeaders: 'draft-7',
-    legacyHeaders: false,
-    passOnStoreError: true,
-    store: makeStore('auth'),
-    message: {
-      error: 'Too many authentication attempts. Please wait 15 minutes before trying again.',
-    },
-  });
-};
-
-// Route-level wrappers. Routes are only mounted after initRateLimiters() has run in server.js.
-const apiLimiter = (req, res, next) => (apiLimit ? apiLimit(req, res, next) : next());
-const authLimiter = (req, res, next) => (authLimit ? authLimit(req, res, next) : next());
-
-module.exports = { apiLimiter, authLimiter, initRateLimiters };
+module.exports = { apiLimiter, authLimiter };

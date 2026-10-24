@@ -1,35 +1,23 @@
-const { getRedis, isRedisReady } = require('../config/redis');
-
-// Cache helpers. Every call fails open: if Redis is missing or errors, callers get a miss
-// and read from MongoDB, so a Redis outage slows responses but never breaks them.
+// In-process cache with a time-to-live. Each instance keeps its own copy, so entries can be stale on
+// other instances for up to the TTL. Callers treat a miss as normal and read from MongoDB.
+const entries = new Map();
 
 const cacheGet = async (key) => {
-  if (!isRedisReady()) return null;
-  try {
-    const raw = await getRedis().get(key);
-    return raw ? JSON.parse(raw) : null;
-  } catch (err) {
-    console.error('Cache read failed:', err.message);
+  const entry = entries.get(key);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    entries.delete(key);
     return null;
   }
+  return entry.value;
 };
 
 const cacheSet = async (key, value, ttlSeconds) => {
-  if (!isRedisReady()) return;
-  try {
-    await getRedis().set(key, JSON.stringify(value), { EX: ttlSeconds });
-  } catch (err) {
-    console.error('Cache write failed:', err.message);
-  }
+  entries.set(key, { value, expiresAt: Date.now() + ttlSeconds * 1000 });
 };
 
 const cacheDel = async (...keys) => {
-  if (!isRedisReady()) return;
-  try {
-    await getRedis().del(keys);
-  } catch (err) {
-    console.error('Cache invalidate failed:', err.message);
-  }
+  keys.forEach((key) => entries.delete(key));
 };
 
 module.exports = { cacheGet, cacheSet, cacheDel };

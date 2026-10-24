@@ -17,7 +17,7 @@ const { htmlToBlocks } = require('../utils/htmlToBlocks');
 const { cacheGet, cacheSet, cacheDel } = require('../utils/cache');
 const { diffSnapshots, summarizeChanges } = require('../utils/editorProposal');
 
-// Public news list cache (page 1, no filters). Lives in Redis so every instance shares it.
+// Public news list cache (page 1, no filters). Kept in process memory for a short time.
 const PUBLIC_CACHE_KEY = 'cache:public-blogs:page1';
 const PUBLIC_CACHE_TTL_SECONDS = 60;
 

@@ -1,5 +1,4 @@
-# API and Redis. MongoDB is not part of this stack: the API connects to the URL in MONGO_URI (from .env).
-# Secrets come from .env (copy .env.example).
+# API only. MongoDB is the URL in MONGO_URI (from .env or the hosting platform). Secrets come from .env.
 services:
   api:
     build: .
@@ -7,26 +6,7 @@ services:
     environment:
       NODE_ENV: production
       PORT: 5000
-      REDIS_URL: redis://redis:6379
       TRUST_PROXY: 1
     ports:
       - "5000:5000"
-    depends_on:
-      redis:
-        condition: service_healthy
     restart: unless-stopped
-
-  redis:
-    image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
-    restart: unless-stopped
-
-volumes:
-  redis-data:

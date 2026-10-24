@@ -10,8 +10,7 @@ const path = require('path');
 const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
 const connectDB = require('./config/db');
-const { connectRedis, disconnectRedis, isRedisReady } = require('./config/redis');
-const { apiLimiter, initRateLimiters } = require('./middleware/rateLimiter');
+const { apiLimiter } = require('./middleware/rateLimiter');
 const uploadRoutes = require('./routes/upload');
 const galleryRoutes = require('./routes/gallery');
 
@@ -406,7 +405,7 @@ app.use('/api', (req, res, next) => {
  * /health:
  *   get:
  *     summary: Liveness and dependency health
- *     description: Returns 200 when the database is connected. Redis is optional and reported separately.
+ *     description: Returns 200 when the database is connected. Returns 503 while it is not.
  *     tags: [System]
  *     responses:
  *       200:
@@ -418,19 +417,15 @@ app.use('/api', (req, res, next) => {
  *               properties:
  *                 status: { type: string, example: ok }
  *                 database: { type: string, example: up }
- *                 redis: { type: string, enum: [up, down, disabled] }
  *                 uptime: { type: integer, description: Seconds since start }
  *       503:
  *         description: The database is not connected
  */
 app.get('/health', async (req, res) => {
   const dbUp = mongoose.connection.readyState === 1;
-  const redisEnabled = Boolean(process.env.REDIS_URL);
-  const redisUp = redisEnabled && isRedisReady();
   res.status(dbUp ? 200 : 503).json({
     status: dbUp ? 'ok' : 'unavailable',
     database: dbUp ? 'up' : 'down',
-    redis: redisEnabled ? (redisUp ? 'up' : 'down') : 'disabled',
     uptime: Math.round(process.uptime()),
   });
 });
@@ -486,23 +481,6 @@ const connectWithRetry = async () => {
   }
 };
 
-const connectRedisOnce = async () => {
-  if (!process.env.REDIS_URL) {
-    console.warn('Redis not configured (REDIS_URL unset): using per-process cache and rate limits');
-    return;
-  }
-  try {
-    // Bounded wait: a slow Redis must not hold up startup, and the database connects independently
-    await Promise.race([
-      connectRedis(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timed out after 10s')), 10000).unref()),
-    ]);
-    console.log('🟢 Redis connected (shared cache and rate limits)');
-  } catch (err) {
-    console.error(`Redis unavailable, using per-process fallbacks: ${err.message}`);
-  }
-};
-
 const start = async () => {
   // Bind to all interfaces so the container is reachable from the proxy and from the host
   const server = app.listen(PORT, '0.0.0.0', () => {
@@ -510,20 +488,14 @@ const start = async () => {
     console.log(`📑 Swagger Docs available at /api-docs`);
   });
 
-  // Database and Redis start independently. A database outage does not disable Redis.
+  // Database connection retries in the background; API calls get 503 until it succeeds
   const databaseReady = connectWithRetry();
-  await connectRedisOnce();
 
-  // Limiters are created after the Redis attempt, so they use the shared store when Redis is up.
-  // Until this runs, the limiter wrappers pass requests through, and API calls get 503 while the database is down.
-  initRateLimiters();
-
-  // Stop accepting traffic, finish in-flight requests, then close database and Redis connections
+  // Stop accepting traffic, finish in-flight requests, then close the database connection
   const shutdown = (signal) => {
     console.log(`${signal} received, shutting down`);
     server.close(async () => {
       try {
-        await disconnectRedis();
         await mongoose.disconnect();
       } finally {
         process.exit(0);
