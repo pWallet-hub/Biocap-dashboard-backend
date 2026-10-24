@@ -1,14 +1,15 @@
 const rateLimit = require('express-rate-limit');
 const { RedisStore } = require('rate-limit-redis');
-const { getRedis } = require('../config/redis');
+const { getRedis, isRedisReady } = require('../config/redis');
 
 // Counters live in Redis when REDIS_URL is set, so limits hold across instances.
 // Without it they fall back to per-process memory.
 // passOnStoreError: a Redis outage lets requests through instead of failing them.
 // Limiters are created once by initRateLimiters(), which server.js calls after Redis connects.
 const makeStore = (name) => {
+  // Only use Redis if it is connected when the limiter is created. Otherwise use the per-process store.
+  if (!isRedisReady()) return undefined;
   const redis = getRedis();
-  if (!redis) return undefined;
   return new RedisStore({
     prefix: `rl:${name}:`,
     sendCommand: (...args) => redis.sendCommand(args),

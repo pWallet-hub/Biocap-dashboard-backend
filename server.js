@@ -141,15 +141,16 @@ const swaggerOptions = {
         description: 'Media and Cloudinary file upload endpoints',
       },
     ],
+    // "Try it out" calls the same host the docs are served from, so it works on any deployment.
+    // SERVER_URL overrides this when the API is reached through a different public address.
     servers: [
       {
-        url: process.env.SERVER_URL || 'https://biocap-dashboard-backend.onrender.com',
-        description: 'Production Server',
+        url: process.env.SERVER_URL || '/',
+        description: 'This server',
       },
-      {
-        url: `http://localhost:${process.env.PORT || 5000}`,
-        description: 'Local Development Server',
-      },
+      ...(process.env.NODE_ENV === 'production'
+        ? []
+        : [{ url: `http://localhost:${process.env.PORT || 5000}`, description: 'Local development' }]),
     ],
     components: {
       // 🟢 2. SECURITY SCHEMES: Standardized JWT Authentication
@@ -393,6 +394,12 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocs, swaggerUiOpti
 // --- Route Declarations & Role-Based Mount Aliases ---
 app.use('/api', apiLimiter);
 
+// While the database is down, API calls fail fast with a clear message instead of hanging
+app.use('/api', (req, res, next) => {
+  if (mongoose.connection.readyState === 1) return next();
+  return res.status(503).json({ error: 'Service temporarily unavailable: database not connected.' });
+});
+
 /**
  * @swagger
  * /health:
@@ -463,26 +470,52 @@ app.use(errorHandler);
 // Start: connect dependencies first, then accept traffic
 const PORT = process.env.PORT || 5000;
 
-const start = async () => {
-  await connectDB();
-
-  if (process.env.REDIS_URL) {
+// Retry the database in the background instead of exiting. The HTTP server is already listening,
+// so the proxy gets a clear 503 from the app, and the connection recovers when the database becomes reachable.
+const connectWithRetry = async () => {
+  for (let attempt = 1; ; attempt += 1) {
     try {
-      await connectRedis();
-      console.log('🟢 Redis connected (shared cache and rate limits)');
+      await connectDB();
+      return;
     } catch (err) {
-      console.error(`Redis unavailable, using per-process fallbacks: ${err.message}`);
+      const delayMs = Math.min(attempt * 5000, 60000);
+      console.error(`MongoDB connection failed (attempt ${attempt}): ${err.message}. Retrying in ${delayMs / 1000}s`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
-  } else {
-    console.warn('Redis not configured (REDIS_URL unset): using per-process cache and rate limits');
   }
+};
 
-  initRateLimiters();
+const connectRedisOnce = async () => {
+  if (!process.env.REDIS_URL) {
+    console.warn('Redis not configured (REDIS_URL unset): using per-process cache and rate limits');
+    return;
+  }
+  try {
+    // Bounded wait: a slow Redis must not hold up startup, and the database connects independently
+    await Promise.race([
+      connectRedis(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timed out after 10s')), 10000).unref()),
+    ]);
+    console.log('🟢 Redis connected (shared cache and rate limits)');
+  } catch (err) {
+    console.error(`Redis unavailable, using per-process fallbacks: ${err.message}`);
+  }
+};
 
-  const server = app.listen(PORT, () => {
-    console.log(`🚀 Biocap Server spinning on port ${PORT}`);
-    console.log(`📑 Swagger Docs available at http://localhost:${PORT}/api-docs`);
+const start = async () => {
+  // Bind to all interfaces so the container is reachable from the proxy and from the host
+  const server = app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🚀 Biocap Server listening on port ${PORT}`);
+    console.log(`📑 Swagger Docs available at /api-docs`);
   });
+
+  // Database and Redis start independently. A database outage does not disable Redis.
+  const databaseReady = connectWithRetry();
+  await connectRedisOnce();
+
+  // Limiters are created after the Redis attempt, so they use the shared store when Redis is up.
+  // Until this runs, the limiter wrappers pass requests through, and API calls get 503 while the database is down.
+  initRateLimiters();
 
   // Stop accepting traffic, finish in-flight requests, then close database and Redis connections
   const shutdown = (signal) => {
@@ -499,6 +532,8 @@ const start = async () => {
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+
+  await databaseReady;
 };
 
 process.on('unhandledRejection', (reason) => {
