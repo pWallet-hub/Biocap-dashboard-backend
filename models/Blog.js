@@ -91,13 +91,49 @@ const CommentSchema = new mongoose.Schema(
 );
 
 // ─── Editor Modifications Schema ─────────────────────────────────────────────
+// The live, not-yet-decided editor proposal. Cleared when the writer responds.
 const EditorModificationSchema = new mongoose.Schema(
   {
     editor: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    version: { type: Number },
     title: { type: String, trim: true },
     excerpt: { type: String, trim: true },
+    tag: { type: String, trim: true },
     blocks: { type: [BlockSchema] },
+    img: { type: String, trim: true },
+    imgPublicId: { type: String, trim: true },
+    bodyHtml: { type: String },
     modifiedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+// A content snapshot used for editor proposal history.
+const ContentSnapshotSchema = new mongoose.Schema(
+  {
+    title: { type: String, trim: true },
+    excerpt: { type: String, trim: true },
+    tag: { type: String, trim: true },
+    img: { type: String, trim: true },
+    imgPublicId: { type: String, trim: true },
+    bodyHtml: { type: String },
+    blocks: { type: [BlockSchema], default: [] },
+  },
+  { _id: false }
+);
+
+// Immutable record of one editor proposal: the content it was based on, what it proposed, and the decision.
+const EditorProposalRecordSchema = new mongoose.Schema(
+  {
+    version: { type: Number, required: true },
+    editor: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    status: { type: String, enum: ['pending', 'accepted', 'rejected'], default: 'pending' },
+    baseline: { type: ContentSnapshotSchema, required: true },
+    proposal: { type: ContentSnapshotSchema, required: true },
+    proposedAt: { type: Date, default: Date.now },
+    decidedAt: { type: Date },
+    decidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    decisionNote: { type: String, trim: true },
   },
   { _id: false }
 );
@@ -115,6 +151,7 @@ const BlogSchema = new mongoose.Schema(
 
     // Core article content structured as flexible blocks
     blocks: { type: [BlockSchema], default: [] },
+    bodyHtml: { type: String },
 
     // Sidebar metadata
     modal: { type: ModalSchema, default: {} },
@@ -165,6 +202,8 @@ const BlogSchema = new mongoose.Schema(
 
     // Officer Review & Editor Change Tracking
     editorModifications: { type: EditorModificationSchema },
+    // Versioned history of editor proposals. Excluded from default queries; select with '+editorProposals'.
+    editorProposals: { type: [EditorProposalRecordSchema], default: [], select: false },
     officerAcceptedChanges: { type: Boolean, default: false },
     officerApprovalNote: { type: String, trim: true },
 

@@ -11,8 +11,10 @@ const {
   sendBlogApprovalEmail,
   sendBlogRejectionEmail,
   sendBlogPublishedEmail,
+  sendEditorProposalDecisionEmail,
 } = require('../utils/sendEmail');
 const { htmlToBlocks } = require('../utils/htmlToBlocks');
+const { diffSnapshots, summarizeChanges } = require('../utils/editorProposal');
 
 // 🟢 High-Speed In-Memory Cache for Public News List
 let publicBlogsCache = null;
@@ -485,56 +487,119 @@ exports.deleteComment = async (req, res) => {
   res.json({ message: 'Comment deleted successfully' });
 };
 
-exports.respondToEditorConsent = async (req, res) => {
-  const { approved, note } = req.body || {};
+/**
+ * PATCH /api/blogs/:id/consent (and /api/contributor/blogs/:id/consent)
+ * Writer accepts or rejects the editor's pending proposal.
+ * Accept applies the proposal and moves the story to approved (publisher step next).
+ * Reject returns the story to draft. Either way the proposal is kept in history and the live proposal is cleared.
+ */
+exports.respondToEditorConsent = async (req, res, next) => {
+  try {
+    const { approved, note } = req.body || {};
 
-  const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false })
-    .populate('originalAuthor', 'firstName lastName email username jobTitle')
-    .populate('author', 'firstName lastName email username jobTitle');
-
-  if (!blog) return res.status(404).json({ error: 'Blog not found' });
-
-  const isWriter = blog.originalAuthor && blog.originalAuthor._id.toString() === req.user.id;
-  if (!isWriter && blog.author && blog.author._id.toString() !== req.user.id) {
-    return res.status(403).json({ error: 'Only the original writer can approve or reject editor changes.' });
-  }
-
-  if (approved === undefined || approved === null || approved === '') {
-    return res.status(400).json({ error: 'approved is required' });
-  }
-
-  blog.publishConsentStatus = approved ? 'approved' : 'rejected';
-  blog.publishConsentNote = note?.trim() || '';
-  blog.publishConsentBy = req.user.id;
-  blog.publishConsentRequestedAt = blog.publishConsentRequestedAt || new Date();
-
-  if (approved) {
-    blog.status = blog.status === 'published' ? 'published' : 'approved';
-  } else {
-    blog.status = 'draft';
-  }
-
-  await blog.save();
-
-  res.json({
-    message: approved ? 'Editor changes approved. This blog can continue to publication.' : 'Editor changes rejected. The blog has been returned to draft.',
-    blog,
-  });
-
-  setImmediate(() => {
-    const recipient = blog.author && blog.author._id ? blog.author._id : blog.originalAuthor?._id;
-    if (recipient) {
-      Notification.create({
-        recipient,
-        sender: req.user.id,
-        type: 'EDITOR_EDIT_PROMPT',
-        message: approved
-          ? `The writer approved changes to "${blog.title}" and publishing can proceed.`
-          : `The writer rejected the editor changes for "${blog.title}" and publication is blocked.`,
-        article: blog._id,
-      }).catch((err) => console.error('Consent notification failed:', err.message));
+    if (approved === undefined || approved === null || approved === '') {
+      return res.status(400).json({ error: 'approved is required' });
     }
-  });
+    const isApproved = approved === true || approved === 'true';
+    const decisionNote = note?.trim() || '';
+
+    const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false })
+      .select('+editorProposals')
+      .populate('originalAuthor', 'firstName lastName email username jobTitle')
+      .populate('author', 'firstName lastName email username jobTitle');
+
+    if (!blog) return res.status(404).json({ error: 'Blog not found' });
+
+    const isWriter = blog.originalAuthor && blog.originalAuthor._id.toString() === req.user.id;
+    if (!isWriter && blog.author && blog.author._id.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'Only the original writer can approve or reject editor changes.' });
+    }
+
+    if (blog.publishConsentStatus !== 'pending' || !blog.editorModifications) {
+      return res.status(409).json({ error: 'No editor proposal is awaiting a decision.' });
+    }
+
+    const proposal = blog.editorModifications.toObject();
+    const now = new Date();
+
+    const set = {
+      publishConsentStatus: isApproved ? 'approved' : 'rejected',
+      publishConsentNote: decisionNote,
+      publishConsentBy: req.user.id,
+      'editorProposals.$[p].status': isApproved ? 'accepted' : 'rejected',
+      'editorProposals.$[p].decidedAt': now,
+      'editorProposals.$[p].decidedBy': req.user.id,
+      'editorProposals.$[p].decisionNote': decisionNote,
+    };
+
+    if (isApproved) {
+      for (const field of ['title', 'excerpt', 'tag', 'img', 'imgPublicId', 'bodyHtml', 'blocks']) {
+        if (proposal[field] !== undefined) set[field] = proposal[field];
+      }
+      set.status = blog.status === 'published' ? 'published' : 'approved';
+    } else {
+      set.status = 'draft';
+    }
+
+    // Conditional write: fails if the proposal was already decided or replaced since it was read.
+    const updated = await Blog.findOneAndUpdate(
+      {
+        _id: blog._id,
+        isDeleted: false,
+        publishConsentStatus: 'pending',
+        'editorModifications.modifiedAt': proposal.modifiedAt,
+      },
+      { $set: set, $unset: { editorModifications: '' } },
+      {
+        new: true,
+        arrayFilters: [{ 'p.version': proposal.version ?? null, 'p.status': 'pending' }],
+      }
+    ).select('+editorProposals');
+
+    if (!updated) {
+      return res.status(409).json({ error: 'This proposal was already decided or changed. Reload and try again.' });
+    }
+
+    res.json({
+      message: isApproved
+        ? 'Editor changes accepted and applied. The blog is ready for publishing.'
+        : 'Editor changes rejected. The blog has been returned to draft.',
+      blog: updated,
+    });
+
+    setImmediate(async () => {
+      try {
+        const editorUser = await User.findById(proposal.editor).select('email firstName');
+        const writerName =
+          [blog.originalAuthor?.firstName, blog.originalAuthor?.lastName].filter(Boolean).join(' ') || 'The writer';
+
+        const record = updated.editorProposals.find((p) => p.version === proposal.version);
+        const changeLabels = record ? summarizeChanges(diffSnapshots(record.baseline, record.proposal)) : [];
+
+        if (editorUser?.email) {
+          await sendEditorProposalDecisionEmail(editorUser.email, editorUser.firstName, updated.title, {
+            approved: isApproved,
+            writerName,
+            note: decisionNote,
+            changeLabels,
+          });
+        }
+
+        writeAuditLog({
+          req,
+          action: isApproved ? 'blog.editor_changes_accepted' : 'blog.editor_changes_rejected',
+          targetModel: 'Blog',
+          targetId: blog._id,
+          targetLabel: blog.title,
+          detail: { version: proposal.version ?? null, note: decisionNote || null },
+        });
+      } catch (asyncErr) {
+        console.error('Non-blocking editor decision email/audit failed:', asyncErr.message);
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
 };
 
 // ─── Authenticated List / Detail ──────────────────────────────────────────────

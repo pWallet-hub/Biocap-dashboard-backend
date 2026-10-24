@@ -181,6 +181,39 @@ router.patch('/:id/comments/:commentId/unhide', protect, authorize(...REVIEWERS)
  */
 router.delete('/:id/comments/:commentId', protect, authorize(...REVIEWERS), asyncHandler(blogController.deleteComment));
 
+/**
+ * @swagger
+ * /api/blogs/{id}/consent:
+ *   patch:
+ *     summary: Accept or reject the editor's pending proposal
+ *     description: |
+ *       Same behavior as /api/contributor/blogs/{id}/consent. Accept applies the proposal and moves the story
+ *       to `approved` (or keeps it `published`). Reject returns it to `draft`. Only the writer may respond.
+ *     tags: [Blogs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [approved]
+ *             properties:
+ *               approved: { type: boolean }
+ *               note: { type: string }
+ *     responses:
+ *       200: { description: Decision recorded and the editor notified by email }
+ *       400: { description: approved is missing }
+ *       403: { description: The caller is not the writer of this blog }
+ *       404: { description: Blog not found }
+ *       409: { description: No editor proposal is awaiting a decision, or it changed while responding }
+ */
 router.patch('/:id/consent', protect, asyncHandler(blogController.respondToEditorConsent));
 
 // ─── Internal Revision Notes & Editorial Discussion Routes ────────────────────

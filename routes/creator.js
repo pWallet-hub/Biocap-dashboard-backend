@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const creatorController = require('../controllers/creatorController');
+const editorBlogController = require('../controllers/editorBlogController');
 const blogController = require('../controllers/blogController');
 const { protect, authorize } = require('../middleware/authMiddleware');
 const { uploadBlogFiles } = require('../middleware/upload');
@@ -175,10 +176,19 @@ router.patch('/blogs/:id/submit', asyncHandler(blogController.submitBlog));
  * @swagger
  * /api/contributor/blogs/{id}/consent:
  *   patch:
- *     summary: Approve or reject editor changes before publishing
+ *     summary: Accept or reject the editor's pending proposal
+ *     description: |
+ *       Accepting applies the proposal to the story and moves it to `approved` (or keeps it `published`).
+ *       Rejecting returns the story to `draft`. Either way the proposal is kept in the revision history
+ *       and the live proposal is cleared. Only the original writer or the responsible author may respond.
  *     tags: [Content Creator]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
  *     requestBody:
  *       required: true
  *       content:
@@ -187,12 +197,66 @@ router.patch('/blogs/:id/submit', asyncHandler(blogController.submitBlog));
  *             type: object
  *             required: [approved]
  *             properties:
- *               approved: { type: boolean }
- *               note: { type: string }
+ *               approved: { type: boolean, description: "true to accept, false to reject" }
+ *               note: { type: string, description: "Optional decision note, sent to the editor by email" }
  *     responses:
- *       200: { description: Consent recorded }
+ *       200:
+ *         description: Decision recorded and the editor notified by email
+ *       400:
+ *         description: approved is missing
+ *       403:
+ *         description: The caller is not the writer of this blog
+ *       404:
+ *         description: Blog not found
+ *       409:
+ *         description: No editor proposal is awaiting a decision, or it was changed while responding
  */
 router.patch('/blogs/:id/consent', asyncHandler(blogController.respondToEditorConsent));
+
+/**
+ * @swagger
+ * /api/contributor/blogs/{id}/editor-revision:
+ *   get:
+ *     summary: Compare the editor's latest proposal with the version it was based on
+ *     description: |
+ *       Returns the baseline (the story as the editor first saw it), the proposed content, and a structured diff.
+ *       Scalar fields report `before`/`after` values. Blocks report `changedBlocks` by index.
+ *     tags: [Content Creator]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Latest editor revision with its diff
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status: { type: string, example: draft }
+ *                 publishConsentStatus: { type: string, enum: [not_required, pending, approved, rejected] }
+ *                 pending: { type: boolean, description: "True while the proposal awaits the writer's decision" }
+ *                 version: { type: integer, example: 2 }
+ *                 recordStatus: { type: string, enum: [pending, accepted, rejected] }
+ *                 editor: { type: object, description: "Populated editor (firstName, lastName, username)" }
+ *                 proposedAt: { type: string, format: date-time }
+ *                 decidedAt: { type: string, format: date-time }
+ *                 decisionNote: { type: string }
+ *                 baseline: { type: object, description: "Content snapshot the editor started from" }
+ *                 proposal: { type: object, description: "Content snapshot the editor proposed" }
+ *                 changes:
+ *                   type: array
+ *                   items: { type: object, description: "Either {field, before, after} or {field: blocks, changedBlocks, beforeCount, afterCount}" }
+ *       403:
+ *         description: The caller is not the writer of this blog
+ *       404:
+ *         description: Blog not found, or no editor revision exists
+ */
+router.get('/blogs/:id/editor-revision', asyncHandler(editorBlogController.getEditorRevisionForWriter));
 
 /**
  * @swagger

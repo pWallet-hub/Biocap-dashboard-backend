@@ -1,14 +1,45 @@
-const nodemailer = require('nodemailer');
+const RESEND_API_URL = 'https://api.resend.com/emails';
 
-const transporter = nodemailer.createTransport({
-  host: process.env.MAIL_SERVER,
-  port: Number(process.env.MAIL_PORT) || 587,
-  secure: false,
-  auth: {
-    user: process.env.MAIL_USERNAME,
-    pass: process.env.MAIL_PASSWORD,
-  },
-});
+// Sends one email through the Resend HTTP API.
+// Set RESEND_API_KEY (required) and RESEND_FROM (optional, a sender on a domain verified in Resend).
+// Without RESEND_FROM, the sender passed by each caller is used.
+async function sendViaResend({ from, to, subject, html }) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    throw new Error('RESEND_API_KEY is not configured');
+  }
+
+  const response = await fetch(RESEND_API_URL, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      from: process.env.RESEND_FROM || from,
+      to: [to],
+      subject,
+      html,
+    }),
+  });
+
+  if (!response.ok) {
+    const detail = await response.text().catch(() => '');
+    throw new Error(`Resend API responded ${response.status}: ${detail}`);
+  }
+
+  return response.json();
+}
+
+// Escapes user-provided text before it is placed in an HTML email.
+const escapeHtml = (value) =>
+  String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[char]);
 
 // ─── Shared layout wrapper ────────────────────────────────────────────────────
 const wrapHtml = (content) => `
@@ -68,7 +99,7 @@ async function sendCredentialsEmail(email, firstName, tempPassword, token) {
     </p>
   `);
 
-  await transporter.sendMail({
+  await sendViaResend({
     from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
     to: email,
     subject: 'Action Required: Setup Your Biocap Account (Expires in 30 min)',
@@ -100,7 +131,7 @@ async function sendPasswordResetEmail(email, firstName, token) {
     </p>
   `);
 
-  await transporter.sendMail({
+  await sendViaResend({
     from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
     to: email,
     subject: '🔐 Biocap password reset request',
@@ -139,7 +170,7 @@ async function sendBlogApprovalEmail(email, firstName, blogTitle) {
     </p>
   `);
 
-  await transporter.sendMail({
+  await sendViaResend({
     from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
     to: email,
     subject: `✅ Your blog "${blogTitle}" has been approved`,
@@ -183,7 +214,7 @@ async function sendBlogRejectionEmail(email, firstName, blogTitle, reviewerNote)
     </p>
   `);
 
-  await transporter.sendMail({
+  await sendViaResend({
     from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
     to: email,
     subject: `📝 Your blog "${blogTitle}" needs revisions`,
@@ -217,7 +248,7 @@ async function sendBlogPublishedEmail(email, firstName, blogTitle, blogSlug) {
     </p>
   `);
 
-  await transporter.sendMail({
+  await sendViaResend({
     from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
     to: email,
     subject: `🚀 Your blog "${blogTitle}" is now live!`,
@@ -246,10 +277,76 @@ async function sendPasswordChangedEmail(email, firstName) {
     </p>
   `);
 
-  await transporter.sendMail({
+  await sendViaResend({
     from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
     to: email,
     subject: '🔒 Your Biocap password was changed',
+    html,
+  });
+}
+
+// ─── 7. Editor Proposal Ready (to writer) ────────────────────────────────────
+// changeLabels: short field names from summarizeChanges(), e.g. ["Title", "Content blocks (2 changed)"]
+async function sendEditorProposalEmail(email, firstName, blogTitle, { editorName, changeLabels, reviewLink }) {
+  const changeItems = changeLabels.map((label) => `<li>${escapeHtml(label)}</li>`).join('');
+
+  const html = wrapHtml(`
+    <h3 style="color: #1a73e8;">Editor Changes Ready for Your Review, ${escapeHtml(firstName || 'there')}</h3>
+    <p>
+      <strong>${escapeHtml(editorName)}</strong> has proposed changes to your article.
+      Nothing is published yet. Please accept or reject the changes.
+    </p>
+
+    <div style="background: #f0f4ff; padding: 15px; border-left: 4px solid #1a73e8; margin: 15px 0;">
+      <strong>Blog Title:</strong> ${escapeHtml(blogTitle)}<br/>
+      <strong>Changed:</strong>
+      <ul style="margin: 8px 0 0 0;">${changeItems || '<li>No field-level changes listed</li>'}</ul>
+    </div>
+
+    <p>
+      <a href="${escapeHtml(reviewLink)}"
+         style="background-color: #1a73e8; color: white; padding: 12px 24px;
+                text-decoration: none; border-radius: 5px; display: inline-block;
+                font-weight: bold; font-size: 15px;">
+        Review Editor Changes →
+      </a>
+    </p>
+  `);
+
+  await sendViaResend({
+    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
+    to: email,
+    subject: `Review editor changes to "${blogTitle}"`,
+    html,
+  });
+}
+
+// ─── 8. Writer Decision on Editor Proposal (to editor) ───────────────────────
+async function sendEditorProposalDecisionEmail(email, firstName, blogTitle, { approved, writerName, note, changeLabels }) {
+  const accentColor = approved ? '#0f9d58' : '#d93025';
+  const changeItems = changeLabels.map((label) => `<li>${escapeHtml(label)}</li>`).join('');
+
+  const html = wrapHtml(`
+    <h3 style="color: ${accentColor};">
+      ${approved ? 'Your Changes Were Accepted' : 'Your Changes Were Rejected'}, ${escapeHtml(firstName || 'there')}
+    </h3>
+    <p>
+      <strong>${escapeHtml(writerName)}</strong>
+      ${approved ? 'accepted' : 'rejected'} the editor changes you proposed.
+    </p>
+
+    <div style="background: #f9f9f9; padding: 15px; border-left: 4px solid ${accentColor}; margin: 15px 0;">
+      <strong>Blog Title:</strong> ${escapeHtml(blogTitle)}<br/>
+      <strong>Status:</strong> ${approved ? 'Approved, ready for publishing' : 'Returned to draft'}<br/>
+      ${changeItems ? `<strong>Proposed changes:</strong><ul style="margin: 8px 0 0 0;">${changeItems}</ul>` : ''}
+      ${note ? `<strong>Writer's Note:</strong><br/><em style="color: #555;">"${escapeHtml(note)}"</em>` : ''}
+    </div>
+  `);
+
+  await sendViaResend({
+    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
+    to: email,
+    subject: `${approved ? 'Accepted' : 'Rejected'}: editor changes to "${blogTitle}"`,
     html,
   });
 }
@@ -261,4 +358,8 @@ module.exports = {
   sendBlogRejectionEmail,
   sendBlogPublishedEmail,
   sendPasswordChangedEmail,
+  sendEditorProposalEmail,
+  sendEditorProposalDecisionEmail,
+  sendViaResend,
+  escapeHtml,
 };

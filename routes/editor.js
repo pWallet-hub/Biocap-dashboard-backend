@@ -180,9 +180,60 @@ router.post('/blogs', blogUploadFields, parseBlogBody, asyncHandler(blogControll
  *               document: { type: string, format: binary }
  *     responses:
  *       200:
- *         description: Article modifications saved and Officer notified
+ *         description: Proposal saved. The live story is unchanged until the writer accepts it. The writer is emailed.
+ *       400:
+ *         description: Invalid blocks JSON, or no changes to propose
+ *       404:
+ *         description: Article not found
+ *       409:
+ *         description: A proposal is already awaiting the writer's decision
  */
 router.put('/blogs/:id', blogUploadFields, parseBlogBody, asyncHandler(editorBlogController.updateBlogByEditor));
+
+/**
+ * @swagger
+ * /api/editor/blogs/{id}/revisions:
+ *   get:
+ *     summary: Version history of editor proposals
+ *     description: |
+ *       Lists every editor proposal with its decision, plus `changesSinceLastProposal`, which compares the
+ *       current submitted story with the last proposed version. Use it to review a writer's resubmission.
+ *     tags: [Communication Editor]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200:
+ *         description: Proposal history and diffs
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status: { type: string }
+ *                 publishConsentStatus: { type: string, enum: [not_required, pending, approved, rejected] }
+ *                 current: { type: object, description: "The story's current content snapshot" }
+ *                 changesSinceLastProposal: { type: array, items: { type: object } }
+ *                 proposals:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       version: { type: integer }
+ *                       status: { type: string, enum: [pending, accepted, rejected] }
+ *                       editor: { type: object }
+ *                       proposedAt: { type: string, format: date-time }
+ *                       decidedAt: { type: string, format: date-time }
+ *                       decisionNote: { type: string }
+ *                       changes: { type: array, items: { type: object } }
+ *       404:
+ *         description: Article not found
+ */
+router.get('/blogs/:id/revisions', asyncHandler(editorBlogController.getEditorRevisions));
 
 /**
  * @swagger
