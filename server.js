@@ -402,14 +402,36 @@ app.use('/api', (req, res, next) => {
 
 /**
  * @swagger
- * /health:
+ * /health/live:
  *   get:
- *     summary: Liveness and dependency health
- *     description: Returns 200 when the database is connected. Returns 503 while it is not.
+ *     summary: 'Liveness: the process is running'
+ *     description: Always 200 while the server process is up. Used by the container health check, so a database outage does not mark the container as dead.
  *     tags: [System]
  *     responses:
  *       200:
- *         description: Service is up and the database is connected
+ *         description: Process is running
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status: { type: string, example: alive }
+ *                 uptime: { type: integer, description: Seconds since start }
+ */
+app.get('/health/live', (req, res) => {
+  res.json({ status: 'alive', uptime: Math.round(process.uptime()) });
+});
+
+/**
+ * @swagger
+ * /health/ready:
+ *   get:
+ *     summary: 'Readiness: the API can serve requests'
+ *     description: 200 when the database is connected, 503 while it is not. Use for load balancers and monitoring.
+ *     tags: [System]
+ *     responses:
+ *       200:
+ *         description: Database connected
  *         content:
  *           application/json:
  *             schema:
@@ -419,16 +441,31 @@ app.use('/api', (req, res, next) => {
  *                 database: { type: string, example: up }
  *                 uptime: { type: integer, description: Seconds since start }
  *       503:
- *         description: The database is not connected
+ *         description: Database not connected
  */
-app.get('/health', async (req, res) => {
+const readinessHandler = (req, res) => {
   const dbUp = mongoose.connection.readyState === 1;
   res.status(dbUp ? 200 : 503).json({
     status: dbUp ? 'ok' : 'unavailable',
     database: dbUp ? 'up' : 'down',
     uptime: Math.round(process.uptime()),
   });
-});
+};
+
+/**
+ * @swagger
+ * /health:
+ *   get:
+ *     summary: Health check (same as /health/ready)
+ *     tags: [System]
+ *     responses:
+ *       200:
+ *         description: Database connected
+ *       503:
+ *         description: Database not connected
+ */
+app.get('/health/ready', readinessHandler);
+app.get('/health', readinessHandler);
 
 app.use('/api/upload', uploadRoutes);
 
