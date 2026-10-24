@@ -141,8 +141,8 @@ const swaggerOptions = {
         description: 'Media and Cloudinary file upload endpoints',
       },
     ],
-    // "Try it out" calls the same host the docs are served from, so it works on any deployment.
-    // SERVER_URL overrides this when the API is reached through a different public address.
+    // "Try it out" calls SERVER_URL when set, otherwise the public API host below.
+    // Set SERVER_URL to point the docs at a different environment (for example http://localhost:5000 in development).
     servers: [
       {
         url: process.env.SERVER_URL || 'https://biocapapi.afs-rwanda.org',
