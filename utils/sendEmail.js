@@ -59,12 +59,12 @@ async function sendCredentialsEmail(email, firstName, tempPassword, token) {
   const resetLink = `${process.env.FRONTEND_URL}/auth/reset-password?token=${token}`;
 
   const html = wrapHtml(`
-    <h3 style="color: #1a73e8;">Welcome to Biocap, ${firstName}!</h3>
+    <h3 style="color: #1a73e8;">Welcome to Biocap, ${escapeHtml(firstName)}!</h3>
     <p>Your account has been successfully registered.</p>
 
     <div style="background: #f9f9f9; padding: 15px; border-left: 4px solid #1a73e8; margin: 15px 0;">
       <strong>Your Temporary Credentials:</strong><br/>
-      &bull; <strong>Email:</strong> ${email}<br/>
+      &bull; <strong>Email:</strong> ${escapeHtml(email)}<br/>
       &bull; <strong>Temporary Password:</strong> <code style="font-size: 15px;">${tempPassword}</code>
     </div>
 
@@ -113,7 +113,7 @@ async function sendPasswordResetEmail(email, firstName, token) {
 
   const html = wrapHtml(`
     <h3 style="color: #1a73e8;">Password Reset Request</h3>
-    <p>Hello ${firstName || 'there'},</p>
+    <p>Hello ${escapeHtml(firstName || 'there')},</p>
     <p>We received a request to reset your Biocap password.</p>
     <p>Click the button below to choose a new password. This link will expire in <strong>30 minutes</strong>.</p>
 
@@ -144,11 +144,11 @@ async function sendBlogApprovalEmail(email, firstName, blogTitle) {
   const dashboardLink = `${process.env.FRONTEND_URL}/dashboard/my-submissions`;
 
   const html = wrapHtml(`
-    <h3 style="color: #0f9d58;">🎉 Great News, ${firstName}!</h3>
+    <h3 style="color: #0f9d58;">🎉 Great News, ${escapeHtml(firstName)}!</h3>
     <p>Your blog post has been <strong>reviewed and approved</strong> by our editorial team.</p>
 
     <div style="background: #f0fff4; padding: 15px; border-left: 4px solid #0f9d58; margin: 15px 0;">
-      <strong>Blog Title:</strong> ${blogTitle}
+      <strong>Blog Title:</strong> ${escapeHtml(blogTitle)}
     </div>
 
     <p>
@@ -183,16 +183,16 @@ async function sendBlogRejectionEmail(email, firstName, blogTitle, reviewerNote)
   const dashboardLink = `${process.env.FRONTEND_URL}/dashboard/my-submissions`;
 
   const html = wrapHtml(`
-    <h3 style="color: #d93025;">Blog Post Needs Revision — ${firstName}</h3>
+    <h3 style="color: #d93025;">Blog Post Needs Revision — ${escapeHtml(firstName)}</h3>
     <p>
       Thank you for your submission. After careful review, our editorial team has
       returned your blog post for revisions.
     </p>
 
     <div style="background: #fff8f7; padding: 15px; border-left: 4px solid #d93025; margin: 15px 0;">
-      <strong>Blog Title:</strong> ${blogTitle}<br/>
+      <strong>Blog Title:</strong> ${escapeHtml(blogTitle)}<br/>
       <strong>Reviewer's Note:</strong><br/>
-      <em style="color: #555;">"${reviewerNote}"</em>
+      <em style="color: #555;">"${escapeHtml(reviewerNote)}"</em>
     </div>
 
     <p>
@@ -227,11 +227,11 @@ async function sendBlogPublishedEmail(email, firstName, blogTitle, blogSlug) {
   const blogLink = `${process.env.FRONTEND_URL}/blog/${blogSlug}`;
 
   const html = wrapHtml(`
-    <h3 style="color: #1a73e8;">🚀 Your Blog is Live, ${firstName}!</h3>
+    <h3 style="color: #1a73e8;">🚀 Your Blog is Live, ${escapeHtml(firstName)}!</h3>
     <p>Congratulations! Your blog post has been published to the Biocap website.</p>
 
     <div style="background: #f0f4ff; padding: 15px; border-left: 4px solid #1a73e8; margin: 15px 0;">
-      <strong>Blog Title:</strong> ${blogTitle}
+      <strong>Blog Title:</strong> ${escapeHtml(blogTitle)}
     </div>
 
     <p>
@@ -259,7 +259,7 @@ async function sendBlogPublishedEmail(email, firstName, blogTitle, blogSlug) {
 // ─── 6. Password Changed Security Alert ──────────────────────────────────────
 async function sendPasswordChangedEmail(email, firstName) {
   const html = wrapHtml(`
-    <h3 style="color: #f4b400;">🔒 Security Alert — ${firstName}</h3>
+    <h3 style="color: #f4b400;">🔒 Security Alert — ${escapeHtml(firstName)}</h3>
     <p>Your Biocap account password was successfully changed.</p>
 
     <div style="background: #fffde7; padding: 15px; border-left: 4px solid #f4b400; margin: 15px 0;">

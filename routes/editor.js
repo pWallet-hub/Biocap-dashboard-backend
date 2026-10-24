@@ -188,7 +188,6 @@ router.post('/blogs', blogUploadFields, parseBlogBody, asyncHandler(blogControll
  *       409:
  *         description: A proposal is already awaiting the writer's decision
  */
-router.put('/blogs/:id', blogUploadFields, parseBlogBody, asyncHandler(editorBlogController.updateBlogByEditor));
 
 /**
  * @swagger
@@ -333,4 +332,17 @@ router.patch('/blogs/:id/publish', asyncHandler(blogController.publishBlog));
  */
 router.patch('/blogs/:id/unpublish', asyncHandler(blogController.unpublishBlog));
 
+// Editor proposals. server.js mounts this ahead of the shared blog alias at /api/editor/blogs,
+// otherwise PUT /api/editor/blogs/:id reaches the live-update handler and bypasses the proposal workflow.
+const proposalRouter = express.Router();
+proposalRouter.put(
+  '/:id',
+  protect,
+  authorize(ROLES.EDITOR, ROLES.ADMIN),
+  blogUploadFields,
+  parseBlogBody,
+  asyncHandler(editorBlogController.updateBlogByEditor)
+);
+
 module.exports = router;
+module.exports.proposalRouter = proposalRouter;

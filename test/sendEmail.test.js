@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const {
   sendEditorProposalEmail,
   sendEditorProposalDecisionEmail,
+  sendBlogRejectionEmail,
   escapeHtml,
 } = require('../utils/sendEmail');
 
@@ -105,4 +106,16 @@ test('a non-2xx response from Resend is surfaced as an error', async () => {
     }),
     /Resend API responded 422: invalid from address/
   );
+});
+
+test('older templates escape the title, name and reviewer note in the HTML body', async () => {
+  const calls = mockFetch(() => okResponse());
+
+  await sendBlogRejectionEmail('ann@example.org', '<b>Ann</b>', 'Story <i>x</i>', '<script>bad()</script>');
+
+  const html = calls[0].body.html;
+  assert.match(html, /&lt;b&gt;Ann&lt;\/b&gt;/);
+  assert.match(html, /Story &lt;i&gt;x&lt;\/i&gt;/);
+  assert.match(html, /&lt;script&gt;bad\(\)&lt;\/script&gt;/);
+  assert.doesNotMatch(html, /<script>/);
 });

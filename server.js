@@ -389,6 +389,8 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/officer', require('./routes/officer'));
 
 // ALIAS MOUNTS: Prevents 404s when Editor or Contributors hit role-prefixed URLs
+// Editor proposals must be mounted before the blog alias so they never reach the live-update handler
+app.use('/api/editor/blogs', require('./routes/editor').proposalRouter);
 app.use('/api/editor/blogs', blogRouter);
 app.use('/api/editor', require('./routes/editor'));
 
