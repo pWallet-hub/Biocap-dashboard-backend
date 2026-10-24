@@ -10,6 +10,7 @@ Interactive API docs: **`/api-docs`** (Swagger UI). Raw OpenAPI JSON: **`/api-do
 
 - Node.js 22 or newer
 - MongoDB 6 or newer
+- Redis 7 (optional, recommended when running more than one instance)
 - A Resend account with a verified sending domain
 - A Cloudinary account
 
@@ -50,6 +51,7 @@ All settings come from environment variables. `.env.example` lists every one wit
 |---|---|---|
 | `PORT` | `5000` | Keep in step with the proxy or platform. |
 | `SERVER_URL` | (same host) | Public API URL for Swagger "Try it out", if different from the docs host. |
+| `REDIS_URL` | (none) | Shared cache and rate limits (Redis). Without it, per-process memory is used. |
 | `TRUST_PROXY` | (none) | Number of proxy hops, so rate limits see real client IPs. |
 | `API_RATE_LIMIT_MAX` | `1000` | Requests per IP per 15 minutes across `/api`. |
 | `JWT_EXPIRES_IN` | `7d` | Access-token lifetime. |
@@ -58,12 +60,12 @@ All settings come from environment variables. `.env.example` lists every one wit
 
 Scripts only: `MONGODB_URI` (alias for `MONGO_URI`), `DRY_RUN` (see Tools).
 
-**Startup behavior:** the server listens first, then retries MongoDB every 5 to 60 seconds. While the database is down, API calls return `503` with a clear message. `/health` reports database status.
+**Startup behavior:** the server listens first, then retries MongoDB every 5 to 60 seconds. While the database is down, API calls return `503` with a clear message. `/health` reports database status, and Redis status for information only.
 
 ## Running with Docker
 
 ```bash
-docker compose up -d --build     # API on :5000 (MongoDB is the URL in MONGO_URI)
+docker compose up -d --build     # API on :5000 and Redis (MongoDB is the URL in MONGO_URI)
 curl http://localhost:5000/health
 ```
 
@@ -80,9 +82,9 @@ docker run --env-file .env -p 5000:5000 biocap-backend
 
 ## Operations
 
-- **Caching:** the public news list (first page, no filters) is cached in process memory for 60 seconds and cleared when articles change. With several instances, each keeps its own copy for up to 60 seconds.
-- **Rate limits:** `/api` is limited per IP. Login, registration, and password endpoints have a stricter limit (10 per 15 minutes). Counters are kept in process memory, so with several instances each one counts separately. Run one instance or enforce the limit at the proxy.
-- **Shutdown:** on `SIGTERM` or `SIGINT` the server stops accepting connections, finishes in-flight requests, and closes the database connection.
+- **Caching:** the public news list (first page, no filters) is cached for 60 seconds and cleared when articles change. The cache is shared through Redis when `REDIS_URL` is set; otherwise each instance keeps its own copy.
+- **Rate limits:** `/api` is limited per IP. Login, registration, and password endpoints have a stricter limit (10 per 15 minutes). Counters are shared through Redis when `REDIS_URL` is set. Without Redis, each instance counts separately, so run one instance or enforce the limit at the proxy.
+- **Shutdown:** on `SIGTERM` or `SIGINT` the server stops accepting connections, finishes in-flight requests, and closes the database and Redis connections.
 - **Logs:** request logs use the `combined` format in production and `dev` otherwise.
 
 ## Tools

@@ -10,7 +10,8 @@ const path = require('path');
 const swaggerUi = require('swagger-ui-express');
 const swaggerJsdoc = require('swagger-jsdoc');
 const connectDB = require('./config/db');
-const { apiLimiter } = require('./middleware/rateLimiter');
+const { connectRedis, disconnectRedis, isRedisReady } = require('./config/redis');
+const { apiLimiter, initRateLimiters } = require('./middleware/rateLimiter');
 const uploadRoutes = require('./routes/upload');
 const galleryRoutes = require('./routes/gallery');
 
@@ -427,7 +428,7 @@ app.get('/health/live', (req, res) => {
  * /health/ready:
  *   get:
  *     summary: 'Readiness: the API can serve requests'
- *     description: 200 when the database is connected, 503 while it is not. Use for load balancers and monitoring.
+ *     description: 200 when the database is connected, 503 while it is not. Redis is reported in the body but does not change the status. Use for load balancers and monitoring.
  *     tags: [System]
  *     responses:
  *       200:
@@ -448,6 +449,8 @@ const readinessHandler = (req, res) => {
   res.status(dbUp ? 200 : 503).json({
     status: dbUp ? 'ok' : 'unavailable',
     database: dbUp ? 'up' : 'down',
+    // Informational only: Redis is optional, so its state never changes the status code
+    redis: process.env.REDIS_URL ? (isRedisReady() ? 'up' : 'down') : 'disabled',
     uptime: Math.round(process.uptime()),
   });
 };
@@ -518,6 +521,23 @@ const connectWithRetry = async () => {
   }
 };
 
+// Redis is optional and must not hold up startup. Bounded wait, and failures only log.
+const connectRedisOnce = async () => {
+  if (!process.env.REDIS_URL) {
+    console.warn('Redis not configured (REDIS_URL unset): using per-process cache and rate limits');
+    return;
+  }
+  try {
+    await Promise.race([
+      connectRedis(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timed out after 10s')), 10000).unref()),
+    ]);
+    console.log('🟢 Redis connected (shared cache and rate limits)');
+  } catch (err) {
+    console.error(`Redis unavailable, using per-process fallbacks: ${err.message}`);
+  }
+};
+
 const start = async () => {
   // Bind to all interfaces so the container is reachable from the proxy and from the host
   const server = app.listen(PORT, '0.0.0.0', () => {
@@ -528,11 +548,12 @@ const start = async () => {
   // Database connection retries in the background; API calls get 503 until it succeeds
   const databaseReady = connectWithRetry();
 
-  // Stop accepting traffic, finish in-flight requests, then close the database connection
+  // Stop accepting traffic, finish in-flight requests, then close the database and Redis connections
   const shutdown = (signal) => {
     console.log(`${signal} received, shutting down`);
     server.close(async () => {
       try {
+        await disconnectRedis();
         await mongoose.disconnect();
       } finally {
         process.exit(0);
@@ -542,6 +563,11 @@ const start = async () => {
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+
+  // Limiters are built after the Redis attempt so they use the shared store. Until then, the wrappers
+  // pass requests through, and API calls get 503 while the database is down anyway.
+  await connectRedisOnce();
+  initRateLimiters();
 
   await databaseReady;
 };
