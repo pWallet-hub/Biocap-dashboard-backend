@@ -25,21 +25,42 @@ npm test                 # unit tests
 
 ## Configuration
 
-| Variable | Required | Notes |
-|---|---|---|
-| `NODE_ENV` | no | `production` enables stricter startup checks, CORS, and logging |
-| `PORT` | no | default 5000 |
-| `MONGO_URI` | yes | MongoDB connection string |
-| `JWT_SECRET` | yes | at least 32 characters in production |
-| `FRONTEND_URL` | production | allowed browser origin(s), comma-separated |
-| `RESEND_API_KEY` | production | Resend API key |
-| `RESEND_FROM` | production | sender on a domain verified in Resend, e.g. `Biocap <noreply@example.org>` |
-| `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | production | uploads |
-| `REDIS_URL` | no | shared cache and rate limits; without it, per-process fallbacks are used |
-| `TRUST_PROXY` | behind a proxy | number of proxy hops, so rate limits see real client IPs |
-| `API_RATE_LIMIT_MAX` | no | requests per IP per 15 minutes across `/api` (default 1000) |
+All settings come from environment variables. `.env.example` lists every one with notes. In production, set them in your hosting platform. Local development reads them from `.env`.
 
-The server refuses to start when a required variable is missing.
+**Required (the server refuses to start without these):**
+
+| Variable | Notes |
+|---|---|
+| `MONGO_URI` | MongoDB connection string. Percent-encode special characters in the password (`@` becomes `%40`). |
+| `JWT_SECRET` | Signs access tokens. Production: at least 32 characters. |
+| `REFRESH_TOKEN_SECRET` | Signs refresh tokens. Must differ from `JWT_SECRET`. Production: at least 32 characters. |
+
+**Required in production (`NODE_ENV=production`):**
+
+| Variable | Notes |
+|---|---|
+| `NODE_ENV` | Set to `production`. |
+| `FRONTEND_URL` | Allowed browser origin(s), comma-separated. |
+| `RESEND_API_KEY` | Resend API key. |
+| `RESEND_FROM` | Sender on a domain verified in Resend, e.g. `Biocap <noreply@example.org>`. |
+| `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Image and document uploads. |
+
+**Optional:**
+
+| Variable | Default | Notes |
+|---|---|---|
+| `PORT` | `5000` | Keep in step with the proxy or platform. |
+| `SERVER_URL` | (same host) | Public API URL for Swagger "Try it out", if different from the docs host. |
+| `TRUST_PROXY` | (none) | Number of proxy hops, so rate limits see real client IPs. |
+| `REDIS_URL` | (none) | Shared cache and rate limits. Without it, per-process fallbacks are used. |
+| `API_RATE_LIMIT_MAX` | `1000` | Requests per IP per 15 minutes across `/api`. |
+| `JWT_EXPIRES_IN` | `7d` | Access-token lifetime. |
+| `PASSWORD_EXPIRY_DAYS` | `90` | Days before a password must change. |
+| `MAIL_FROM`, `MAIL_FROM_NAME` | (none) | Only used if `RESEND_FROM` is not set. |
+
+Scripts only: `MONGODB_URI` (alias for `MONGO_URI`), `DRY_RUN` (see Tools).
+
+**Startup behavior:** the server listens first, then retries MongoDB every 5 to 60 seconds. While the database is down, API calls return `503` with a clear message. `/health` reports database and Redis status.
 
 ## Running with Docker
 

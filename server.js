@@ -19,7 +19,7 @@ const galleryRoutes = require('./routes/gallery');
 require('./services/blogEventListener');
 
 // Fail fast on missing configuration instead of failing later on the first request that needs it
-const requiredEnv = ['MONGO_URI', 'JWT_SECRET'];
+const requiredEnv = ['MONGO_URI', 'JWT_SECRET', 'REFRESH_TOKEN_SECRET'];
 if (process.env.NODE_ENV === 'production') {
   requiredEnv.push('FRONTEND_URL', 'RESEND_API_KEY', 'RESEND_FROM', 'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET');
 }
@@ -28,8 +28,9 @@ if (missingEnv.length > 0) {
   console.error(`Missing required environment variables: ${missingEnv.join(', ')}`);
   process.exit(1);
 }
-if (process.env.NODE_ENV === 'production' && process.env.JWT_SECRET.length < 32) {
-  console.error('JWT_SECRET must be at least 32 characters in production.');
+const weakSecrets = ['JWT_SECRET', 'REFRESH_TOKEN_SECRET'].filter((name) => process.env[name].length < 32);
+if (process.env.NODE_ENV === 'production' && weakSecrets.length > 0) {
+  console.error(`These secrets must be at least 32 characters in production: ${weakSecrets.join(', ')}`);
   process.exit(1);
 }
 

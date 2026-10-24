@@ -3,10 +3,17 @@ const User = require('../models/User');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
+// Secrets are required at startup (see server.js). Never fall back to a built-in value.
+const requireSecret = (name) => {
+  const value = process.env[name];
+  if (!value) throw new Error(`${name} is not set`);
+  return value;
+};
+
 const generateAccessToken = (user) => {
   return jwt.sign(
     { id: user._id, role: user.role, username: user.username },
-    process.env.JWT_SECRET || 'biocap_default_jwt_secret',
+    requireSecret('JWT_SECRET'),
     { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
   );
 };
@@ -14,7 +21,7 @@ const generateAccessToken = (user) => {
 const generateRefreshToken = (user) => {
   return jwt.sign(
     { id: user._id },
-    process.env.REFRESH_TOKEN_SECRET || 'biocap_default_refresh_secret',
+    requireSecret('REFRESH_TOKEN_SECRET'),
     { expiresIn: '30d' }
   );
 };
@@ -204,7 +211,7 @@ exports.refreshToken = async (req, res) => {
 
     const decoded = jwt.verify(
       refreshToken,
-      process.env.REFRESH_TOKEN_SECRET || 'biocap_default_refresh_secret'
+      requireSecret('REFRESH_TOKEN_SECRET')
     );
 
     const user = await User.findById(decoded.id);
