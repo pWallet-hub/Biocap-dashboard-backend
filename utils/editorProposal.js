@@ -1,7 +1,12 @@
 // Pure helpers for editor proposals: snapshots, diffs, and human-readable summaries.
 // Kept free of database and mail code so they can be unit tested directly.
 
+const { diffWords, htmlToText } = require('./wordDiff');
+
 const SCALAR_FIELDS = ['title', 'excerpt', 'tag', 'img', 'imgPublicId', 'bodyHtml'];
+
+// Internal storage details that are not shown to people.
+const HIDDEN_FIELDS = new Set(['imgPublicId']);
 
 const FIELD_LABELS = {
   title: 'Title',
@@ -85,6 +90,94 @@ const summarizeChanges = (changes) => {
   return labels;
 };
 
+const DEFAULT_MAX_CHARS = 1500;
+
+const blockContent = (block) => (block ? String(block.text ?? (typeof block.src === 'string' ? block.src : '')) : '');
+
+const BLOCK_LABELS = {
+  p: 'Paragraph',
+  h1: 'Heading',
+  h2: 'Subheading',
+  quote: 'Quote',
+  list: 'List',
+  image: 'Image',
+  video: 'Video',
+  hero: 'Hero',
+  html: 'HTML block',
+};
+
+const blockKind = (block) => BLOCK_LABELS[block?.type] || 'Block';
+
+const blockSegments = (before, after) => {
+  if (before?.type === 'image' || after?.type === 'image') {
+    return [
+      ...(before ? [{ type: 'delete', text: 'previous image' }] : []),
+      ...(after ? [{ type: 'insert', text: 'new image' }] : []),
+    ];
+  }
+  return diffWords(blockContent(before), blockContent(after));
+};
+
+// Keeps the first maxChars characters of a diff so one very long body cannot fill an email.
+const capSegments = (segments, maxChars) => {
+  let remaining = maxChars;
+  const capped = [];
+  for (const segment of segments) {
+    if (remaining <= 0) break;
+    if (segment.text.length <= remaining) {
+      capped.push(segment);
+      remaining -= segment.text.length;
+    } else {
+      capped.push({ ...segment, text: `${segment.text.slice(0, remaining)}…` });
+      remaining = 0;
+    }
+  }
+  return capped;
+};
+
+// Word-level, human-readable items for each change: { label, segments, truncated }.
+// Matches the review panel in the app, so the email shows the same added and deleted text.
+const describeChanges = (changes, { maxChars = DEFAULT_MAX_CHARS } = {}) => {
+  const items = [];
+
+  for (const change of changes) {
+    if (HIDDEN_FIELDS.has(change.field)) continue;
+
+    if (change.field === 'blocks') {
+      for (const block of change.changedBlocks || []) {
+        items.push({
+          label: `${blockKind(block.after ?? block.before)} ${block.index + 1}`,
+          segments: blockSegments(block.before, block.after),
+        });
+      }
+      continue;
+    }
+
+    const label = FIELD_LABELS[change.field] || change.field;
+    if (change.field === 'img') {
+      items.push({
+        label,
+        segments: [
+          { type: 'delete', text: 'previous cover image' },
+          { type: 'insert', text: 'new cover image' },
+        ],
+      });
+      continue;
+    }
+
+    const before = String(change.before ?? '');
+    const after = String(change.after ?? '');
+    const segments =
+      change.field === 'bodyHtml' ? diffWords(htmlToText(before), htmlToText(after)) : diffWords(before, after);
+    items.push({ label, segments });
+  }
+
+  return items.map((item) => {
+    const total = item.segments.reduce((sum, segment) => sum + segment.text.length, 0);
+    return { label: item.label, segments: capSegments(item.segments, maxChars), truncated: total > maxChars };
+  });
+};
+
 // Content fields an accepted proposal writes onto the live story.
 const APPLIED_FIELDS = ['title', 'excerpt', 'tag', 'img', 'imgPublicId', 'bodyHtml', 'blocks'];
 
@@ -150,6 +243,7 @@ module.exports = {
   snapshotOf,
   diffSnapshots,
   summarizeChanges,
+  describeChanges,
   canProposeEdit,
   canDecideProposal,
   buildConsentDecision,

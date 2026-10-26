@@ -10,7 +10,7 @@ const { writeAuditLog } = require('../utils/auditLogger');
  * Get creator profile and blog status metrics
  */
 exports.getMyProfile = async (req, res) => {
-  const userId = new mongoose.Types.ObjectId(req.user._id);
+  const userId = new mongoose.Types.ObjectId(req.user.id);
 
   const [user, stats] = await Promise.all([
     User.findById(userId).select('-password'),
@@ -62,7 +62,7 @@ exports.getMyProfile = async (req, res) => {
  */
 exports.getMyActivity = async (req, res) => {
   const recentBlogs = await Blog.find({
-    originalAuthor: req.user._id,
+    originalAuthor: req.user.id,
     isDeleted: false,
   })
     .select('title status views createdAt updatedAt')
@@ -83,7 +83,7 @@ exports.getMyActivity = async (req, res) => {
  */
 exports.getMyBlogs = async (req, res) => {
   const { page, limit, skip } = parsePagination(req.query);
-  const filter = { originalAuthor: req.user._id, isDeleted: false };
+  const filter = { originalAuthor: req.user.id, isDeleted: false };
 
   if (req.query.status) {
     filter.status = req.query.status;
@@ -112,7 +112,7 @@ exports.getMyBlogs = async (req, res) => {
 exports.getMyBlogById = async (req, res) => {
   const blog = await Blog.findOne({
     _id: req.params.id,
-    originalAuthor: req.user._id,
+    originalAuthor: req.user.id,
     isDeleted: false,
   });
 
@@ -164,7 +164,7 @@ exports.getPublishedBlogBySlug = async (req, res) => {
 exports.markChangeImplemented = async (req, res) => {
   const { implementationNote, changeId } = req.body || {};
 
-  const blog = await Blog.findOne({ _id: req.params.id, originalAuthor: req.user._id, isDeleted: false });
+  const blog = await Blog.findOne({ _id: req.params.id, originalAuthor: req.user.id, isDeleted: false });
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
 
   if (!blog.changeRequests || blog.changeRequests.length === 0) {
@@ -183,7 +183,7 @@ exports.markChangeImplemented = async (req, res) => {
   }
 
   change.implemented = true;
-  change.implementedBy = req.user._id;
+  change.implementedBy = req.user.id;
   change.implementedAt = new Date();
   if (implementationNote && implementationNote.trim()) change.implementationNote = implementationNote.trim();
 
@@ -194,7 +194,7 @@ exports.markChangeImplemented = async (req, res) => {
     try {
       await Notification.create({
         recipient: change.commenter,
-        sender: req.user._id,
+        sender: req.user.id,
         type: 'CHANGE_REQUEST_IMPLEMENTED',
         message: `${req.user.firstName || req.user.username} marked requested change implemented on "${blog.title}"`,
         article: blog._id,

@@ -63,6 +63,44 @@ test('sendEditorProposalEmail posts to Resend with the API key and escaped user 
   assert.doesNotMatch(calls[0].body.html, /<b>Bold<\/b>/);
 });
 
+test('sendEditorProposalEmail shows added and deleted text inline, escaped, with the review link', async () => {
+  const calls = mockFetch(() => okResponse());
+
+  await sendEditorProposalEmail('writer@example.org', 'Ann', 'Story', {
+    editorName: 'Eve',
+    changeItems: [
+      {
+        label: 'Title',
+        segments: [
+          { type: 'equal', text: 'The ' },
+          { type: 'delete', text: 'old<name>' },
+          { type: 'insert', text: 'new name' },
+        ],
+        truncated: false,
+      },
+    ],
+    reviewLink: 'https://biocap.example/creator/proposals/abc123',
+  });
+
+  const html = calls[0].body.html;
+  assert.match(html, /<span style="[^"]*text-decoration: underline[^"]*">new name<\/span>/);
+  assert.match(html, /<span style="[^"]*line-through[^"]*">old&lt;name&gt;<\/span>/);
+  assert.doesNotMatch(html, /old<name>/);
+  assert.match(html, /href="https:\/\/biocap.example\/creator\/proposals\/abc123"/);
+});
+
+test('sendEditorProposalEmail notes when a long change was shortened', async () => {
+  const calls = mockFetch(() => okResponse());
+
+  await sendEditorProposalEmail('writer@example.org', 'Ann', 'Story', {
+    editorName: 'Eve',
+    changeItems: [{ label: 'Body text', segments: [{ type: 'insert', text: 'x' }], truncated: true }],
+    reviewLink: 'https://biocap.example/creator/proposals/abc123',
+  });
+
+  assert.match(calls[0].body.html, /Long text was shortened here/);
+});
+
 test('sendEditorProposalDecisionEmail escapes the writer note and reports status', async () => {
   const calls = mockFetch(() => okResponse());
 

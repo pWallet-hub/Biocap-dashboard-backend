@@ -87,3 +87,25 @@ test('summarizeChanges gives readable labels and merges the two image fields', (
 
   assert.deepEqual(summarizeChanges(changes), ['Title', 'Cover image', 'Content blocks (2 changed)']);
 });
+
+test('describeChanges gives word-level items and hides internal storage fields', () => {
+  const { describeChanges } = require('../utils/editorProposal');
+  const before = snapshotOf(baseStory());
+  const after = snapshotOf({ ...baseStory(), title: 'Original title revised', imgPublicId: 'b', blocks: [{ type: 'h1', text: 'Heading' }, { type: 'p', text: 'First paragraph, edited' }] });
+
+  const items = describeChanges(diffSnapshots(before, after));
+
+  assert.deepEqual(items.map((item) => item.label), ['Title', 'Paragraph 2']);
+  assert.deepEqual(items[0].segments.filter((segment) => segment.type === 'insert'), [{ type: 'insert', text: ' revised' }]);
+  assert.equal(items[1].truncated, false);
+});
+
+test('describeChanges shortens very long changes and flags them', () => {
+  const { describeChanges } = require('../utils/editorProposal');
+  const changes = [{ field: 'bodyHtml', before: '', after: `<p>${'word '.repeat(1000)}</p>` }];
+
+  const [item] = describeChanges(changes, { maxChars: 100 });
+
+  assert.equal(item.truncated, true);
+  assert.ok(item.segments.reduce((sum, segment) => sum + segment.text.length, 0) <= 101);
+});

@@ -2,7 +2,7 @@ const Blog = require('../models/Blog');
 const User = require('../models/User');
 const { writeAuditLog } = require('../utils/auditLogger');
 const { htmlToBlocks } = require('../utils/htmlToBlocks');
-const { snapshotOf, diffSnapshots, summarizeChanges, canProposeEdit } = require('../utils/editorProposal');
+const { snapshotOf, diffSnapshots, summarizeChanges, describeChanges, canProposeEdit } = require('../utils/editorProposal');
 const { ROLES } = require('../constants/roles');
 const { sendEditorProposalEmail, sendEditorProposalWithdrawnEmail } = require('../utils/sendEmail');
 
@@ -142,19 +142,24 @@ exports.updateBlogByEditor = async (req, res, next) => {
         }).select('email firstName');
 
         const changeLabels = summarizeChanges(changes);
-        const reviewLink = `${process.env.FRONTEND_URL}/dashboard/my-submissions`;
+        const changeItems = describeChanges(changes);
+        const reviewLink = `${process.env.FRONTEND_URL}/creator/proposals/${updated._id}`;
 
-        await Promise.allSettled(
+        const results = await Promise.allSettled(
           writers
             .filter((writer) => writer.email)
             .map((writer) =>
               sendEditorProposalEmail(writer.email, writer.firstName, updated.title, {
                 editorName,
                 changeLabels,
+                changeItems,
                 reviewLink,
               })
             )
         );
+        results
+          .filter((result) => result.status === 'rejected')
+          .forEach((result) => console.error('Editor proposal email failed:', result.reason?.message || result.reason));
 
         writeAuditLog({
           req,

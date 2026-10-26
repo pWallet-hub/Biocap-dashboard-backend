@@ -286,21 +286,58 @@ async function sendPasswordChangedEmail(email, firstName) {
 }
 
 // ─── 7. Editor Proposal Ready (to writer) ────────────────────────────────────
-// changeLabels: short field names from summarizeChanges(), e.g. ["Title", "Content blocks (2 changed)"]
-async function sendEditorProposalEmail(email, firstName, blogTitle, { editorName, changeLabels, reviewLink }) {
-  const changeItems = changeLabels.map((label) => `<li>${escapeHtml(label)}</li>`).join('');
+// Marks used in the email. Inline styles only, since email clients drop <style> blocks.
+const INSERT_STYLE = 'background: #d7f5e0; color: #0b5a2a; text-decoration: underline; text-decoration-color: #0f9d58;';
+const DELETE_STYLE = 'background: #fde7e5; color: #a50e0e; text-decoration: line-through;';
+
+// Renders one diff segment list with added text highlighted and removed text struck through.
+const renderSegments = (segments) =>
+  segments
+    .map((segment) => {
+      const text = escapeHtml(segment.text);
+      if (segment.type === 'insert') return `<span style="${INSERT_STYLE}">${text}</span>`;
+      if (segment.type === 'delete') return `<span style="${DELETE_STYLE}">${text}</span>`;
+      return text;
+    })
+    .join('');
+
+// changeItems: from describeChanges(), e.g. [{ label: 'Title', segments: [...], truncated: false }]
+// changeLabels: short names from summarizeChanges(), used when no detailed items are given.
+async function sendEditorProposalEmail(email, firstName, blogTitle, { editorName, changeLabels = [], changeItems = [], reviewLink }) {
+  const detailed = changeItems.length > 0;
+
+  const changeBlocks = detailed
+    ? changeItems
+        .map(
+          (item) => `
+            <div style="margin: 12px 0;">
+              <p style="margin: 0 0 4px 0; font-size: 12px; font-weight: bold; text-transform: uppercase; color: #1a73e8;">
+                ${escapeHtml(item.label)}
+              </p>
+              <p style="margin: 0; padding: 8px 10px; background: #ffffff; border: 1px solid #e3e6ea; white-space: pre-wrap;">${renderSegments(item.segments)}${item.truncated ? ' …' : ''}</p>
+              ${item.truncated ? '<p style="margin: 4px 0 0 0; font-size: 12px; color: #666;">Long text was shortened here. Open the review page to see all of it.</p>' : ''}
+            </div>`
+        )
+        .join('')
+    : `<ul style="margin: 8px 0 0 0;">${changeLabels.map((label) => `<li>${escapeHtml(label)}</li>`).join('') || '<li>No field-level changes listed</li>'}</ul>`;
 
   const html = wrapHtml(`
     <h3 style="color: #1a73e8;">Editor Changes Ready for Your Review, ${escapeHtml(firstName || 'there')}</h3>
     <p>
       <strong>${escapeHtml(editorName)}</strong> has proposed changes to your article.
-      Nothing is published yet. Please accept or reject the changes.
+      Nothing is published yet. Please review the changes below and decide whether to accept them.
+    </p>
+
+    <p style="font-size: 13px; color: #444;">
+      <span style="${INSERT_STYLE} padding: 0 3px;">Added</span>
+      &nbsp;&nbsp;
+      <span style="${DELETE_STYLE} padding: 0 3px;">Deleted</span>
     </p>
 
     <div style="background: #f0f4ff; padding: 15px; border-left: 4px solid #1a73e8; margin: 15px 0;">
       <strong>Blog Title:</strong> ${escapeHtml(blogTitle)}<br/>
-      <strong>Changed:</strong>
-      <ul style="margin: 8px 0 0 0;">${changeItems || '<li>No field-level changes listed</li>'}</ul>
+      <strong>Changes:</strong>
+      ${changeBlocks}
     </div>
 
     <p>
@@ -310,6 +347,10 @@ async function sendEditorProposalEmail(email, firstName, blogTitle, { editorName
                 font-weight: bold; font-size: 15px;">
         Review Editor Changes →
       </a>
+    </p>
+    <p style="font-size: 13px; color: #666;">
+      Your story stays unchanged until you decide. Accepting applies every change. Rejecting any change returns the
+      proposal to the editor with your reason.
     </p>
   `);
 
