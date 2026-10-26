@@ -1,5 +1,24 @@
 const RESEND_API_URL = 'https://api.resend.com/emails';
 
+const EMAIL_ADDRESS = /^[^\s<>@"]+@[^\s<>@"]+\.[^\s<>@"]+$/;
+const NAMED_SENDER = /^[^<>]+ <[^\s<>]+>$/;
+
+// Returns a sender Resend accepts: "email@example.com" or "Name <email@example.com>".
+// Surrounding quotes from the .env file are removed first. Anything else is rejected before Resend is called,
+// with the rejected value in the message so the server setting can be found and corrected.
+function resolveSender(value, fromRESEND_FROM) {
+  const sender = String(value ?? '').trim().replace(/^"(.*)"$/, '$1').trim();
+  const isNamed = NAMED_SENDER.test(sender) && EMAIL_ADDRESS.test(sender.slice(sender.lastIndexOf('<') + 1, -1));
+  if (EMAIL_ADDRESS.test(sender) || isNamed) return sender;
+
+  const source = fromRESEND_FROM
+    ? `in RESEND_FROM ("${sender || '(empty)'}")`
+    : `built from MAIL_FROM_NAME and MAIL_FROM because RESEND_FROM is not set ("${String(value)}")`;
+  throw new Error(
+    `Email sender ${source} is not valid. Set RESEND_FROM to "Biocap <noreply@your-verified-domain>" (a sender on a domain verified in Resend).`
+  );
+}
+
 // Sends one email through the Resend HTTP API.
 // Set RESEND_API_KEY (required) and RESEND_FROM (optional, a sender on a domain verified in Resend).
 // Without RESEND_FROM, the sender passed by each caller is used.
@@ -9,13 +28,7 @@ async function sendViaResend({ from, to, subject, html }) {
     throw new Error('RESEND_API_KEY is not configured');
   }
 
-  // Check the sender before calling Resend. An unset MAIL_FROM otherwise produces "undefined <undefined>".
-  const sender = process.env.RESEND_FROM || from;
-  if (!sender || /undefined|null/.test(sender)) {
-    throw new Error(
-      'Email sender is not configured. Set RESEND_FROM to a sender on a domain verified in Resend, e.g. Biocap <noreply@your-domain>'
-    );
-  }
+  const sender = resolveSender(process.env.RESEND_FROM || from, Boolean(process.env.RESEND_FROM));
 
   // A hung connection fails after 10 seconds instead of leaving the request waiting.
   const response = await fetch(RESEND_API_URL, {
@@ -424,7 +437,38 @@ async function sendEditorProposalWithdrawnEmail(email, firstName, blogTitle, { e
   });
 }
 
+// ─── 10. Story Published (to editors) ────────────────────────────────────────
+async function sendStoryPublishedToEditorEmail(email, firstName, blogTitle, { publishedBy, storyLink }) {
+  const html = wrapHtml(`
+    <h3 style="color: #0f9d58;">Story Published, ${escapeHtml(firstName || 'there')}</h3>
+    <p>
+      <strong>${escapeHtml(publishedBy)}</strong> published a story. It is now live on the Biocap website.
+    </p>
+
+    <div style="background: #f0fff4; padding: 15px; border-left: 4px solid #0f9d58; margin: 15px 0;">
+      <strong>Story Title:</strong> ${escapeHtml(blogTitle)}
+    </div>
+
+    <p>
+      <a href="${escapeHtml(storyLink)}"
+         style="background-color: #0f9d58; color: white; padding: 12px 24px;
+                text-decoration: none; border-radius: 5px; display: inline-block;
+                font-weight: bold; font-size: 15px;">
+        View Published Story →
+      </a>
+    </p>
+  `);
+
+  await sendViaResend({
+    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
+    to: email,
+    subject: `Published: "${blogTitle}"`,
+    html,
+  });
+}
+
 module.exports = {
+  sendStoryPublishedToEditorEmail,
   sendCredentialsEmail,
   sendPasswordResetEmail, // ✅ Added missing export!
   sendBlogApprovalEmail,

@@ -170,7 +170,46 @@ test('sending fails with a clear message when the sender is not configured', asy
       changeLabels: [],
       reviewLink: 'https://biocap.example',
     }),
-    /Email sender is not configured/
+    /Email sender built from MAIL_FROM_NAME and MAIL_FROM because RESEND_FROM is not set .* is not valid/
   );
   assert.equal(calls.length, 0, 'Resend must not be called with an invalid sender');
+});
+
+test('a malformed RESEND_FROM is rejected before Resend is called, and the value is shown', async () => {
+  const calls = mockFetch(() => okResponse());
+
+  for (const bad of ['Biocap noreply@blog.example.org', '"Biocap" <undefined>', 'Biocap <>']) {
+    process.env.RESEND_FROM = bad;
+    await assert.rejects(
+      sendEditorProposalEmail('writer@example.org', 'Ann', 'Story', { editorName: 'Eve', changeLabels: [], reviewLink: 'https://biocap.example' }),
+      (err) => err.message.includes('in RESEND_FROM') && err.message.includes('is not valid')
+    );
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('quoted and named RESEND_FROM values are accepted and sent as given', async () => {
+  const calls = mockFetch(() => okResponse());
+
+  process.env.RESEND_FROM = '"Biocap <noreply@blog.example.org>"';
+  await sendEditorProposalEmail('writer@example.org', 'Ann', 'Story', { editorName: 'Eve', changeLabels: [], reviewLink: 'https://biocap.example' });
+
+  assert.equal(calls[0].body.from, 'Biocap <noreply@blog.example.org>');
+});
+
+test('sendStoryPublishedToEditorEmail names the publisher and escapes the title', async () => {
+  const { sendStoryPublishedToEditorEmail } = require('../utils/sendEmail');
+  process.env.RESEND_FROM = 'Biocap <noreply@blog.example.org>';
+  const calls = mockFetch(() => okResponse());
+
+  await sendStoryPublishedToEditorEmail('editor@example.org', 'Eve', '<b>Big</b> story', {
+    publishedBy: 'Ann <writer>',
+    storyLink: 'https://biocap.example/Stewardship-News/big-story',
+  });
+
+  assert.deepEqual(calls[0].body.to, ['editor@example.org']);
+  assert.equal(calls[0].body.subject, 'Published: "<b>Big</b> story"');
+  assert.match(calls[0].body.html, /Ann &lt;writer&gt;/);
+  assert.match(calls[0].body.html, /href="https:\/\/biocap.example\/Stewardship-News\/big-story"/);
+  assert.doesNotMatch(calls[0].body.html, /<b>Big<\/b>/);
 });

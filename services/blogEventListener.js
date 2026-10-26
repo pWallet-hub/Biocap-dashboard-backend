@@ -2,6 +2,31 @@
 const blogEventBus = require('../config/eventBus');
 const AuditLog = require('../models/AuditLog');
 const Notification = require('../models/Notification');
+const User = require('../models/User');
+const { ROLES } = require('../constants/roles');
+const { sendStoryPublishedToEditorEmail } = require('../utils/sendEmail');
+
+// Emails every active editor that the story is published. Failures are logged per editor, not thrown.
+const emailEditorsAboutPublication = async (blog, userId) => {
+  const [publisher, editors] = await Promise.all([
+    User.findById(userId).select('firstName lastName username').lean(),
+    User.find({ role: ROLES.EDITOR, isActive: true }).select('email firstName').lean(),
+  ]);
+  const publishedBy = [publisher?.firstName, publisher?.lastName].filter(Boolean).join(' ') || publisher?.username || 'Someone';
+  const storyLink = `${process.env.FRONTEND_URL}/Stewardship-News/${blog.slug}`;
+
+  const recipients = editors.filter((editor) => editor.email);
+  const results = await Promise.allSettled(
+    recipients.map((editor) =>
+      sendStoryPublishedToEditorEmail(editor.email, editor.firstName, blog.title, { publishedBy, storyLink })
+    )
+  );
+  results.forEach((result, index) => {
+    if (result.status === 'rejected') {
+      console.error(`Publish email to editor ${recipients[index].email} failed:`, result.reason?.message || result.reason);
+    }
+  });
+};
 
 // Handle Post-Publish Background Side-Effects
 blogEventBus.on('blog:published', async ({ blog, userId }) => {
@@ -15,6 +40,7 @@ blogEventBus.on('blog:published', async ({ blog, userId }) => {
         targetId: blog._id,
         details: `Published article: "${blog.title}"`,
       }),
+      emailEditorsAboutPublication(blog, userId),
     ];
 
     if (authorId) {
