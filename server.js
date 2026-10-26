@@ -19,7 +19,8 @@ const galleryRoutes = require('./routes/gallery');
 require('./services/blogEventListener');
 
 // Fail fast on missing configuration instead of failing later on the first request that needs it
-const requiredEnv = ['MONGO_URI', 'JWT_SECRET', 'REFRESH_TOKEN_SECRET'];
+// MONGO_URI is optional: config/db.js falls back to its hardcoded connection string.
+const requiredEnv = ['JWT_SECRET', 'REFRESH_TOKEN_SECRET'];
 if (process.env.NODE_ENV === 'production') {
   requiredEnv.push('FRONTEND_URL', 'RESEND_API_KEY', 'RESEND_FROM', 'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET');
 }
