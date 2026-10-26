@@ -15,7 +15,7 @@ const {
 } = require('../utils/sendEmail');
 const { htmlToBlocks } = require('../utils/htmlToBlocks');
 const { cacheGet, cacheSet, cacheDel } = require('../utils/cache');
-const { diffSnapshots, summarizeChanges } = require('../utils/editorProposal');
+const { diffSnapshots, summarizeChanges, canDecideProposal, buildConsentDecision } = require('../utils/editorProposal');
 
 // Public news list cache (page 1, no filters). Kept in process memory for a short time.
 const PUBLIC_CACHE_KEY = 'cache:public-blogs:page1';
@@ -542,36 +542,25 @@ exports.respondToEditorConsent = async (req, res, next) => {
 
     if (!blog) return res.status(404).json({ error: 'Blog not found' });
 
-    const isWriter = blog.originalAuthor && blog.originalAuthor._id.toString() === req.user.id;
-    if (!isWriter && blog.author && blog.author._id.toString() !== req.user.id) {
-      return res.status(403).json({ error: 'Only the original writer can approve or reject editor changes.' });
-    }
-
     if (blog.publishConsentStatus !== 'pending' || !blog.editorModifications) {
       return res.status(409).json({ error: 'No editor proposal is awaiting a decision.' });
     }
 
     const proposal = blog.editorModifications.toObject();
-    const now = new Date();
-
-    const set = {
-      publishConsentStatus: isApproved ? 'approved' : 'rejected',
-      publishConsentNote: decisionNote,
-      publishConsentBy: req.user.id,
-      'editorProposals.$[p].status': isApproved ? 'accepted' : 'rejected',
-      'editorProposals.$[p].decidedAt': now,
-      'editorProposals.$[p].decidedBy': req.user.id,
-      'editorProposals.$[p].decisionNote': decisionNote,
-    };
-
-    if (isApproved) {
-      for (const field of ['title', 'excerpt', 'tag', 'img', 'imgPublicId', 'bodyHtml', 'blocks']) {
-        if (proposal[field] !== undefined) set[field] = proposal[field];
-      }
-      set.status = blog.status === 'published' ? 'published' : 'approved';
-    } else {
-      set.status = 'draft';
+    const decision = canDecideProposal({ blog, userId: req.user.id, proposal });
+    if (!decision.allowed) {
+      return res.status(403).json({ error: decision.reason });
     }
+
+    const now = new Date();
+    const { set, unset } = buildConsentDecision({
+      proposal,
+      approved: isApproved,
+      note: decisionNote,
+      decidedBy: req.user.id,
+      now,
+      currentStatus: blog.status,
+    });
 
     // Conditional write: fails if the proposal was already decided or replaced since it was read.
     const updated = await Blog.findOneAndUpdate(
@@ -581,7 +570,7 @@ exports.respondToEditorConsent = async (req, res, next) => {
         publishConsentStatus: 'pending',
         'editorModifications.modifiedAt': proposal.modifiedAt,
       },
-      { $set: set, $unset: { editorModifications: '' } },
+      { $set: set, $unset: unset },
       {
         returnDocument: 'after',
         arrayFilters: [{ 'p.version': proposal.version ?? null, 'p.status': 'pending' }],

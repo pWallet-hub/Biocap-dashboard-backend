@@ -2,7 +2,7 @@ const Blog = require('../models/Blog');
 const User = require('../models/User');
 const { writeAuditLog } = require('../utils/auditLogger');
 const { htmlToBlocks } = require('../utils/htmlToBlocks');
-const { snapshotOf, diffSnapshots, summarizeChanges } = require('../utils/editorProposal');
+const { snapshotOf, diffSnapshots, summarizeChanges, canProposeEdit } = require('../utils/editorProposal');
 const { ROLES } = require('../constants/roles');
 const { sendEditorProposalEmail, sendEditorProposalWithdrawnEmail } = require('../utils/sendEmail');
 
@@ -35,6 +35,11 @@ exports.updateBlogByEditor = async (req, res, next) => {
 
     if (blog.publishConsentStatus === 'pending') {
       return res.status(409).json({ error: PENDING_PROPOSAL_MESSAGE });
+    }
+
+    const gate = canProposeEdit(blog);
+    if (!gate.allowed) {
+      return res.status(409).json({ error: gate.reason });
     }
 
     // Safely parse blocks if sent as stringified JSON from FormData

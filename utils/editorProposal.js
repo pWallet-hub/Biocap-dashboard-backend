@@ -85,9 +85,66 @@ const summarizeChanges = (changes) => {
   return labels;
 };
 
+// Content fields an accepted proposal writes onto the live story.
+const APPLIED_FIELDS = ['title', 'excerpt', 'tag', 'img', 'imgPublicId', 'bodyHtml', 'blocks'];
+
+// An editor may propose changes until the story is published. Published stories must be unpublished first,
+// so accepted changes never go live without a publisher's review.
+const canProposeEdit = (blog) => {
+  if (blog.status === 'published') {
+    return { allowed: false, reason: 'Unpublish this story before proposing changes.' };
+  }
+  return { allowed: true };
+};
+
+// Only the writer (original author, or the current author) may accept or reject a proposal,
+// and never the editor who made it.
+const canDecideProposal = ({ blog, userId, proposal }) => {
+  const isWriter =
+    String(blog.originalAuthor?._id ?? blog.originalAuthor) === String(userId) ||
+    String(blog.author?._id ?? blog.author) === String(userId);
+  if (!isWriter) {
+    return { allowed: false, reason: 'Only the writer can approve or reject editor changes.' };
+  }
+  if (proposal.editor && String(proposal.editor) === String(userId)) {
+    return { allowed: false, reason: 'You cannot decide on a proposal you made yourself.' };
+  }
+  return { allowed: true };
+};
+
+// The update that records a writer's decision on the pending proposal.
+// Accepting copies the proposal onto the story. Rejecting returns it to draft, unless it is already published,
+// in which case the live story stays published. Both keep the proposal in history and clear the live copy.
+const buildConsentDecision = ({ proposal, approved, note, decidedBy, now, currentStatus }) => {
+  const set = {
+    publishConsentStatus: approved ? 'approved' : 'rejected',
+    publishConsentNote: note,
+    publishConsentBy: decidedBy,
+    'editorProposals.$[p].status': approved ? 'accepted' : 'rejected',
+    'editorProposals.$[p].decidedAt': now,
+    'editorProposals.$[p].decidedBy': decidedBy,
+    'editorProposals.$[p].decisionNote': note,
+  };
+
+  if (approved) {
+    for (const field of APPLIED_FIELDS) {
+      if (proposal[field] !== undefined) set[field] = proposal[field];
+    }
+    set.status = currentStatus === 'published' ? 'published' : 'approved';
+  } else {
+    set.status = currentStatus === 'published' ? 'published' : 'draft';
+  }
+
+  return { set, unset: { editorModifications: '' } };
+};
+
 module.exports = {
   FIELD_LABELS,
+  APPLIED_FIELDS,
   snapshotOf,
   diffSnapshots,
   summarizeChanges,
+  canProposeEdit,
+  canDecideProposal,
+  buildConsentDecision,
 };
