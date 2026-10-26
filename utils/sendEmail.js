@@ -423,12 +423,12 @@ async function sendStoryPublishedToEditorEmail(email, firstName, blogTitle, { pu
 async function sendStoryInReviewEmail(email, firstName, blogTitle, { writerName, reviewLink }) {
   const html = wrapHtml({
     preheader: `${writerName} submitted "${blogTitle}" for review.`,
-    eyebrow: 'Review queue',
-    heading: 'A story is waiting for review',
+    eyebrow: 'Biocap Project Blogs',
+    heading: 'A story is waiting for your review',
     body: `
       ${greeting(firstName)}
       ${paragraph(`<strong>${escapeHtml(writerName)}</strong> has finished the story and submitted it for review.`)}
-      ${detailTable([['Story', escapeHtml(blogTitle)], ['Author', escapeHtml(writerName)], ['Status', 'Waiting for review']])}
+      ${detailTable([['Story title', escapeHtml(blogTitle)], ['Author', escapeHtml(writerName)], ['Status', 'Waiting for review']])}
       ${button('Open the review queue', reviewLink)}
       ${muted('Review the story and approve it, request changes, or leave it in the queue.')}`,
   });

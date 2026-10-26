@@ -243,6 +243,6 @@ test('new templates escape user text and every email carries a plain-text copy',
   assert.doesNotMatch(calls[0].body.html, /<b>x<\/b>/);
   assert.match(calls[1].body.html, /href="https:\/\/biocap.example\/editor\/review"/);
   assert.match(calls[1].body.html, /Ann &lt;writer&gt;/);
-  assert.ok(calls[1].body.text.includes('A story is waiting for review'));
+  assert.ok(calls[1].body.text.includes('A story is waiting for your review'));
   assert.doesNotMatch(calls[1].body.text, /&(lt|gt|amp|quot|#39);/);
 });
