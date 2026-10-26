@@ -88,11 +88,20 @@ const summarizeChanges = (changes) => {
 // Content fields an accepted proposal writes onto the live story.
 const APPLIED_FIELDS = ['title', 'excerpt', 'tag', 'img', 'imgPublicId', 'bodyHtml', 'blocks'];
 
+// Whether the user wrote the story (original author, or the current author).
+const isWriterOf = (blog, userId) =>
+  String(blog.originalAuthor?._id ?? blog.originalAuthor) === String(userId) ||
+  String(blog.author?._id ?? blog.author) === String(userId);
+
 // An editor may propose changes until the story is published. Published stories must be unpublished first,
-// so accepted changes never go live without a publisher's review.
-const canProposeEdit = (blog) => {
+// so accepted changes never go live without a publisher's review. A writer edits their own story directly,
+// since they would otherwise be the only person who could decide on their own proposal.
+const canProposeEdit = (blog, userId) => {
   if (blog.status === 'published') {
     return { allowed: false, reason: 'Unpublish this story before proposing changes.' };
+  }
+  if (userId && isWriterOf(blog, userId)) {
+    return { allowed: false, reason: 'You wrote this story, so edit it directly instead of proposing changes.' };
   }
   return { allowed: true };
 };
@@ -100,10 +109,7 @@ const canProposeEdit = (blog) => {
 // Only the writer (original author, or the current author) may accept or reject a proposal,
 // and never the editor who made it.
 const canDecideProposal = ({ blog, userId, proposal }) => {
-  const isWriter =
-    String(blog.originalAuthor?._id ?? blog.originalAuthor) === String(userId) ||
-    String(blog.author?._id ?? blog.author) === String(userId);
-  if (!isWriter) {
+  if (!isWriterOf(blog, userId)) {
     return { allowed: false, reason: 'Only the writer can approve or reject editor changes.' };
   }
   if (proposal.editor && String(proposal.editor) === String(userId)) {

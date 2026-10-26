@@ -260,5 +260,43 @@ test(
       assert.equal(blog.status, 'published');
       assert.equal(blog.title, 'Revised title');
     });
+
+    await t.test('an editor cannot change a writer\'s story through the live update route', async () => {
+      const res = await call(blogController.updateBlog, {
+        userId: ids.editor,
+        role: 'editor',
+        params: { id: blogId },
+        body: { title: 'Direct edit' },
+      });
+      assert.equal(res.statusCode, 403);
+      assert.match(res.body.error, /propose changes/);
+      assert.equal((await live()).title, 'Revised title');
+    });
+
+    await t.test('an editor who wrote a story edits it directly and cannot propose changes to it', async () => {
+      const { insertedId } = await Blog.collection.insertOne(
+        seedBlog({ originalAuthor: ids.editor, author: ids.editor, originalAuthorRole: 'editor', authorRole: 'editor' })
+      );
+      const ownId = String(insertedId);
+
+      const proposed = await call(editorController.updateBlogByEditor, {
+        userId: ids.editor,
+        role: 'editor',
+        params: { id: ownId },
+        body: { title: 'Self proposal' },
+      });
+      assert.equal(proposed.statusCode, 409);
+
+      const direct = await call(blogController.updateBlog, {
+        userId: ids.editor,
+        role: 'editor',
+        params: { id: ownId },
+        body: { title: 'Edited directly' },
+      });
+      assert.equal(direct.statusCode, 200);
+      const own = await Blog.findById(ownId).lean();
+      assert.equal(own.title, 'Edited directly');
+      assert.equal(own.publishConsentStatus, 'not_required');
+    });
   }
 );

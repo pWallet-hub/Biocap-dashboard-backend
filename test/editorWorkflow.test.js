@@ -157,3 +157,13 @@ test('the proposal baseline is preserved when a proposal is accepted or rejected
   assert.equal(set['editorProposals.$[p].status'], 'rejected');
   assert.equal(record.baseline.title, 'Original');
 });
+
+test('an editor may propose changes to a story written by someone else', () => {
+  assert.deepEqual(canProposeEdit(storyBy(WRITER), EDITOR), { allowed: true });
+});
+
+test('an editor who wrote a story edits it directly rather than proposing changes to themselves', () => {
+  const result = canProposeEdit(storyBy(EDITOR), EDITOR);
+  assert.equal(result.allowed, false);
+  assert.match(result.reason, /edit it directly/);
+});

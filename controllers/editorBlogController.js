@@ -37,7 +37,7 @@ exports.updateBlogByEditor = async (req, res, next) => {
       return res.status(409).json({ error: PENDING_PROPOSAL_MESSAGE });
     }
 
-    const gate = canProposeEdit(blog);
+    const gate = canProposeEdit(blog, req.user.id);
     if (!gate.allowed) {
       return res.status(409).json({ error: gate.reason });
     }

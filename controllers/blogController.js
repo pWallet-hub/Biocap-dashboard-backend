@@ -813,6 +813,15 @@ exports.updateBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
 
+  // Editors never change a writer's story directly. Their changes go through PUT /api/editor/blogs/:id
+  // as a proposal, which the writer accepts or rejects.
+  const isOwnStory = [blog.originalAuthor, blog.author].some((ref) => String(ref) === req.user.id);
+  if (req.user.role === ROLES.EDITOR && !isOwnStory) {
+    return res.status(403).json({
+      error: 'Editors propose changes to a writer\'s story instead of editing it directly.',
+    });
+  }
+
   const isReviewerUser = isReviewer(req.user.role);
 
   if (!isReviewerUser && !blog.canBeEditedBy(req.user)) {
