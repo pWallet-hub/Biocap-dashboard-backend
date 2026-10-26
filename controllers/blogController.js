@@ -16,6 +16,7 @@ const {
 const { htmlToBlocks } = require('../utils/htmlToBlocks');
 const { cacheGet, cacheSet, cacheDel } = require('../utils/cache');
 const { diffSnapshots, summarizeChanges, canDecideProposal, buildConsentDecision } = require('../utils/editorProposal');
+const { notifyUsers, notifyUsersByRole } = require('../utils/notify');
 
 // Public news list cache (page 1, no filters). Kept in process memory for a short time.
 const PUBLIC_CACHE_KEY = 'cache:public-blogs:page1';
@@ -597,6 +598,13 @@ exports.respondToEditorConsent = async (req, res, next) => {
         const record = updated.editorProposals.find((p) => p.version === proposal.version);
         const changeLabels = record ? summarizeChanges(diffSnapshots(record.baseline, record.proposal)) : [];
 
+        await notifyUsers([proposal.editor], {
+          type: 'PROPOSAL_DECIDED',
+          message: `${writerName} ${isApproved ? 'accepted' : 'rejected'} your changes to "${updated.title}".`,
+          article: updated._id,
+          sender: req.user.id,
+        });
+
         if (editorUser?.email) {
           await sendEditorProposalDecisionEmail(editorUser.email, editorUser.firstName, updated.title, {
             approved: isApproved,
@@ -865,8 +873,11 @@ exports.updateBlog = async (req, res) => {
     blog.bodyHtml = bodyHtml;
   }
 
-  blog.author = req.user.id;
-  blog.authorRole = req.user.role;
+  // Only the writer's own saves make them the current author. An editor or admin who saves the story never takes it over.
+  if (String(blog.originalAuthor) === req.user.id) {
+    blog.author = req.user.id;
+    blog.authorRole = req.user.role;
+  }
 
   const imgFile = req.files?.img?.[0] || req.file;
   const docFile = req.files?.document?.[0];
@@ -1049,6 +1060,13 @@ exports.submitBlog = async (req, res) => {
     detail: { resubmission: wasRejectedBefore },
   });
 
+  notifyUsersByRole([ROLES.EDITOR, ROLES.ADMIN], {
+    type: 'STORY_SUBMITTED',
+    message: `"${blog.title}" was ${wasRejectedBefore ? 'resubmitted' : 'submitted'} for review.`,
+    article: blog._id,
+    sender: req.user.id,
+  });
+
   res.json({
     message: wasRejectedBefore ? 'Blog resubmitted for review' : 'Blog submitted for review',
     blog,
@@ -1142,6 +1160,12 @@ exports.reviewBlog = async (req, res, next) => {
             article: blog._id,
           }));
           if (alerts.length > 0) await Notification.insertMany(alerts);
+          await notifyUsers([blog.originalAuthor?._id || blog.originalAuthor], {
+            type: 'REVIEW_APPROVED',
+            message: `"${blog.title}" was approved and is waiting to be published.`,
+            article: blog._id,
+            sender: req.user.id,
+          });
         }
 
         if (decision === 'rejected' && blog.originalAuthor) {
@@ -1175,6 +1199,10 @@ exports.reviewBlog = async (req, res, next) => {
 // 🟢 ATOMIC FAST PUBLISH
 exports.publishBlog = async (req, res, next) => {
   try {
+    // Editors publish stories. Other roles, including admins, can approve but not put a story live.
+    if (req.user.role !== ROLES.EDITOR) {
+      return res.status(403).json({ error: 'Only an editor can publish a story.' });
+    }
     const existing = await Blog.findOne({ _id: req.params.id, isDeleted: false }).select('status title originalAuthor slug').populate('originalAuthor', 'email firstName');
     if (!existing) return res.status(404).json({ error: 'Blog not found' });
     if (existing.status !== 'approved') {

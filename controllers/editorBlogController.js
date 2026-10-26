@@ -4,7 +4,8 @@ const { writeAuditLog } = require('../utils/auditLogger');
 const { htmlToBlocks } = require('../utils/htmlToBlocks');
 const { snapshotOf, diffSnapshots, summarizeChanges, describeChanges, canProposeEdit } = require('../utils/editorProposal');
 const { ROLES } = require('../constants/roles');
-const { sendEditorProposalEmail, sendEditorProposalWithdrawnEmail } = require('../utils/sendEmail');
+const { sendEditorProposalEmail, sendEditorProposalWithdrawnEmail, publicUrl } = require('../utils/sendEmail');
+const { notifyUsers } = require('../utils/notify');
 
 const PENDING_PROPOSAL_MESSAGE = "An editor proposal is already awaiting the writer's decision.";
 
@@ -27,7 +28,7 @@ const emailWritersAboutProposal = async (blog, editorId, changes) => {
 
     const changeLabels = summarizeChanges(changes);
     const changeItems = describeChanges(changes);
-    const reviewLink = `${process.env.FRONTEND_URL}/creator/proposals/${blog._id}`;
+    const reviewLink = `${publicUrl(`/creator/proposals/${blog._id}`)}`;
 
     const results = await Promise.allSettled(
       reachable.map((writer) =>
@@ -177,6 +178,12 @@ exports.updateBlogByEditor = async (req, res, next) => {
 
     // 🟢 NON-BLOCKING: record the audit entry after responding
     setImmediate(() => {
+      notifyUsers([updated.originalAuthor, updated.author], {
+        type: 'PROPOSAL_RECEIVED',
+        message: `An editor proposed changes to "${updated.title}". Review them before they are applied.`,
+        article: updated._id,
+        sender: req.user.id,
+      });
       writeAuditLog({
         req,
         action: 'blog.editor_proposal',
@@ -374,6 +381,13 @@ exports.withdrawEditorProposal = async (req, res, next) => {
             .filter((writer) => writer.email)
             .map((writer) => sendEditorProposalWithdrawnEmail(writer.email, writer.firstName, updated.title, { editorName }))
         );
+
+        await notifyUsers([updated.originalAuthor, updated.author], {
+          type: 'PROPOSAL_WITHDRAWN',
+          message: `The editor withdrew the proposed changes to "${updated.title}". Nothing needs your decision.`,
+          article: updated._id,
+          sender: req.user.id,
+        });
 
         writeAuditLog({
           req,

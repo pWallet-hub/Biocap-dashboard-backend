@@ -1,5 +1,18 @@
 const RESEND_API_URL = 'https://api.resend.com/emails';
 
+// Builds a link to the public website. Emails must never point at localhost, so a local or missing
+// FRONTEND_URL is an error: the email is not sent and the caller reports why.
+function publicUrl(path) {
+  const base = String(process.env.FRONTEND_URL || '').trim().replace(/\/+$/, '');
+  if (!base) {
+    throw new Error('FRONTEND_URL is not set. Set it to the public website address so email links work.');
+  }
+  if (/localhost|127\.0\.0\.1|0\.0\.0\.0/i.test(base)) {
+    throw new Error(`FRONTEND_URL is "${base}", a local address. Set it to the public website address so email links work.`);
+  }
+  return `${base}${path}`;
+}
+
 const EMAIL_ADDRESS = /^[^\s<>@"]+@[^\s<>@"]+\.[^\s<>@"]+$/;
 const NAMED_SENDER = /^[^<>]+ <[^\s<>]+>$/;
 
@@ -79,7 +92,7 @@ const wrapHtml = (content) => `
 
 // ─── 1. Account Creation / Credentials Email ─────────────────────────────────
 async function sendCredentialsEmail(email, firstName, tempPassword, token) {
-  const resetLink = `${process.env.FRONTEND_URL}/auth/reset-password?token=${token}`;
+  const resetLink = `${publicUrl('/auth/reset-password')}?token=${token}`;
 
   const html = wrapHtml(`
     <h3 style="color: #1a73e8;">Welcome to Biocap, ${escapeHtml(firstName)}!</h3>
@@ -132,7 +145,7 @@ async function sendCredentialsEmail(email, firstName, tempPassword, token) {
 
 // ─── 2. Password Reset Email ────────────────────────────────────────────────
 async function sendPasswordResetEmail(email, firstName, token) {
-  const resetLink = `${process.env.FRONTEND_URL}/auth/reset-password?token=${token}`;
+  const resetLink = `${publicUrl('/auth/reset-password')}?token=${token}`;
 
   const html = wrapHtml(`
     <h3 style="color: #1a73e8;">Password Reset Request</h3>
@@ -164,7 +177,7 @@ async function sendPasswordResetEmail(email, firstName, token) {
 
 // ─── 3. Blog Approved Email ───────────────────────────────────────────────────
 async function sendBlogApprovalEmail(email, firstName, blogTitle) {
-  const dashboardLink = `${process.env.FRONTEND_URL}/dashboard/my-submissions`;
+  const dashboardLink = `${publicUrl('/creator/my-stories')}`;
 
   const html = wrapHtml(`
     <h3 style="color: #0f9d58;">🎉 Great News, ${escapeHtml(firstName)}!</h3>
@@ -203,7 +216,7 @@ async function sendBlogApprovalEmail(email, firstName, blogTitle) {
 
 // ─── 4. Blog Rejected Email ───────────────────────────────────────────────────
 async function sendBlogRejectionEmail(email, firstName, blogTitle, reviewerNote) {
-  const dashboardLink = `${process.env.FRONTEND_URL}/dashboard/my-submissions`;
+  const dashboardLink = `${publicUrl('/creator/my-stories')}`;
 
   const html = wrapHtml(`
     <h3 style="color: #d93025;">Blog Post Needs Revision — ${escapeHtml(firstName)}</h3>
@@ -247,7 +260,7 @@ async function sendBlogRejectionEmail(email, firstName, blogTitle, reviewerNote)
 
 // ─── 5. Blog Published Email ──────────────────────────────────────────────────
 async function sendBlogPublishedEmail(email, firstName, blogTitle, blogSlug) {
-  const blogLink = `${process.env.FRONTEND_URL}/blog/${blogSlug}`;
+  const blogLink = `${publicUrl(`/Stewardship-News/${blogSlug}`)}`;
 
   const html = wrapHtml(`
     <h3 style="color: #1a73e8;">🚀 Your Blog is Live, ${escapeHtml(firstName)}!</h3>
@@ -468,6 +481,7 @@ async function sendStoryPublishedToEditorEmail(email, firstName, blogTitle, { pu
 }
 
 module.exports = {
+  publicUrl,
   sendStoryPublishedToEditorEmail,
   sendCredentialsEmail,
   sendPasswordResetEmail, // ✅ Added missing export!

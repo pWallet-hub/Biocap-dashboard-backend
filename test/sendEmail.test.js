@@ -213,3 +213,15 @@ test('sendStoryPublishedToEditorEmail names the publisher and escapes the title'
   assert.match(calls[0].body.html, /href="https:\/\/biocap.example\/Stewardship-News\/big-story"/);
   assert.doesNotMatch(calls[0].body.html, /<b>Big<\/b>/);
 });
+
+test('publicUrl builds links on the public site and refuses localhost', () => {
+  const { publicUrl } = require('../utils/sendEmail');
+  process.env.FRONTEND_URL = 'https://biocap.example/';
+  assert.equal(publicUrl('/creator/my-stories'), 'https://biocap.example/creator/my-stories');
+
+  process.env.FRONTEND_URL = 'http://localhost:3000';
+  assert.throws(() => publicUrl('/creator/my-stories'), /local address/);
+
+  delete process.env.FRONTEND_URL;
+  assert.throws(() => publicUrl('/creator/my-stories'), /FRONTEND_URL is not set/);
+});

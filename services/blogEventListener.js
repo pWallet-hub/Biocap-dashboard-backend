@@ -4,7 +4,8 @@ const AuditLog = require('../models/AuditLog');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
-const { sendStoryPublishedToEditorEmail } = require('../utils/sendEmail');
+const { sendStoryPublishedToEditorEmail, publicUrl } = require('../utils/sendEmail');
+const { notifyUsersByRole } = require('../utils/notify');
 
 // Emails every active editor that the story is published. Failures are logged per editor, not thrown.
 const emailEditorsAboutPublication = async (blog, userId) => {
@@ -13,7 +14,7 @@ const emailEditorsAboutPublication = async (blog, userId) => {
     User.find({ role: ROLES.EDITOR, isActive: true }).select('email firstName').lean(),
   ]);
   const publishedBy = [publisher?.firstName, publisher?.lastName].filter(Boolean).join(' ') || publisher?.username || 'Someone';
-  const storyLink = `${process.env.FRONTEND_URL}/Stewardship-News/${blog.slug}`;
+  const storyLink = `${publicUrl(`/Stewardship-News/${blog.slug}`)}`;
 
   const recipients = editors.filter((editor) => editor.email);
   const results = await Promise.allSettled(
@@ -41,6 +42,12 @@ blogEventBus.on('blog:published', async ({ blog, userId }) => {
         details: `Published article: "${blog.title}"`,
       }),
       emailEditorsAboutPublication(blog, userId),
+      notifyUsersByRole([ROLES.EDITOR, ROLES.ADMIN], {
+        type: 'STORY_PUBLISHED',
+        message: `"${blog.title}" was published.`,
+        article: blog._id,
+        sender: userId,
+      }),
     ];
 
     if (authorId) {
@@ -49,7 +56,7 @@ blogEventBus.on('blog:published', async ({ blog, userId }) => {
           recipient: authorId,
           sender: userId,
           message: `Your story "${blog.title}" is live on the website!`,
-          type: 'publish',
+          type: 'STORY_PUBLISHED',
           article: blog._id,
         })
       );
@@ -81,7 +88,7 @@ blogEventBus.on('blog:unpublished', async ({ blog, userId }) => {
           recipient: authorId,
           sender: userId,
           message: `Your story "${blog.title}" was unpublished from the website.`,
-          type: 'unpublish',
+          type: 'STORY_UNPUBLISHED',
           article: blog._id,
         })
       );
