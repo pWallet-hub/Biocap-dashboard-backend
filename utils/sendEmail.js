@@ -9,6 +9,14 @@ async function sendViaResend({ from, to, subject, html }) {
     throw new Error('RESEND_API_KEY is not configured');
   }
 
+  // Check the sender before calling Resend. An unset MAIL_FROM otherwise produces "undefined <undefined>".
+  const sender = process.env.RESEND_FROM || from;
+  if (!sender || /undefined|null/.test(sender)) {
+    throw new Error(
+      'Email sender is not configured. Set RESEND_FROM to a sender on a domain verified in Resend, e.g. Biocap <noreply@your-domain>'
+    );
+  }
+
   // A hung connection fails after 10 seconds instead of leaving the request waiting.
   const response = await fetch(RESEND_API_URL, {
     method: 'POST',
@@ -18,7 +26,7 @@ async function sendViaResend({ from, to, subject, html }) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      from: process.env.RESEND_FROM || from,
+      from: sender,
       to: [to],
       subject,
       html,

@@ -157,3 +157,20 @@ test('older templates escape the title, name and reviewer note in the HTML body'
   assert.match(html, /&lt;script&gt;bad\(\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<script>/);
 });
+
+test('sending fails with a clear message when the sender is not configured', async () => {
+  delete process.env.RESEND_FROM;
+  delete process.env.MAIL_FROM;
+  delete process.env.MAIL_FROM_NAME;
+  const calls = mockFetch(() => okResponse());
+
+  await assert.rejects(
+    sendEditorProposalEmail('writer@example.org', 'Ann', 'Story', {
+      editorName: 'Eve',
+      changeLabels: [],
+      reviewLink: 'https://biocap.example',
+    }),
+    /Email sender is not configured/
+  );
+  assert.equal(calls.length, 0, 'Resend must not be called with an invalid sender');
+});
