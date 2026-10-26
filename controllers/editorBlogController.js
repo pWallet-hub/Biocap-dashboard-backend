@@ -11,6 +11,42 @@ const PENDING_PROPOSAL_MESSAGE = "An editor proposal is already awaiting the wri
 const isWriterOf = (blog, userId) =>
   blog.originalAuthor?.toString() === userId || blog.author?.toString() === userId;
 
+// Emails every writer of the story about the pending proposal.
+// Resolves with the outcome instead of throwing, so the caller can report it to the editor.
+const emailWritersAboutProposal = async (blog, editorId, changes) => {
+  try {
+    const editor = await User.findById(editorId).select('firstName lastName username');
+    const editorName = [editor?.firstName, editor?.lastName].filter(Boolean).join(' ') || editor?.username || 'An editor';
+
+    const writerIds = [blog.originalAuthor, blog.author].filter(Boolean);
+    const writers = await User.find({ _id: { $in: writerIds } }).select('email firstName');
+    const reachable = writers.filter((writer) => writer.email);
+    if (reachable.length === 0) {
+      return { writerNotified: false, writerEmailError: 'The writer has no email address on file.' };
+    }
+
+    const changeLabels = summarizeChanges(changes);
+    const changeItems = describeChanges(changes);
+    const reviewLink = `${process.env.FRONTEND_URL}/creator/proposals/${blog._id}`;
+
+    const results = await Promise.allSettled(
+      reachable.map((writer) =>
+        sendEditorProposalEmail(writer.email, writer.firstName, blog.title, { editorName, changeLabels, changeItems, reviewLink })
+      )
+    );
+    const failure = results.find((result) => result.status === 'rejected');
+    if (failure) {
+      const reason = failure.reason?.message || 'unknown error';
+      console.error('Editor proposal email failed:', reason);
+      return { writerNotified: false, writerEmailError: reason };
+    }
+    return { writerNotified: true, writerEmailError: null };
+  } catch (err) {
+    console.error('Editor proposal email failed:', err.message);
+    return { writerNotified: false, writerEmailError: err.message };
+  }
+};
+
 // Returns a plain-object copy of each record with its editor replaced by a { firstName, lastName, username } summary.
 const withEditorNames = async (records) => {
   const ids = [...new Set(records.map((record) => String(record.editor)))];
@@ -125,53 +161,69 @@ exports.updateBlogByEditor = async (req, res, next) => {
       return res.status(409).json({ error: PENDING_PROPOSAL_MESSAGE });
     }
 
+    // The writer is emailed before responding, so the editor learns whether the email went out.
+    // The proposal is already saved, so a failed email does not undo it.
+    const emailOutcome = await emailWritersAboutProposal(updated, req.user.id, changes);
+    const message = emailOutcome.writerNotified
+      ? 'Editor proposal saved. The writer has been emailed to accept or reject the changes.'
+      : `Editor proposal saved, but the writer was not emailed (${emailOutcome.writerEmailError}). Use "Email writer" to send it again.`;
+
     res.json({
-      message: 'Editor proposal saved. The writer has been emailed to accept or reject the changes.',
+      message,
+      writerNotified: emailOutcome.writerNotified,
+      writerEmailError: emailOutcome.writerEmailError,
       blog: updated,
     });
 
-    // 🟢 NON-BLOCKING ASYNC TASKS: email the writer and record the audit entry after responding
-    setImmediate(async () => {
-      try {
-        const editor = await User.findById(req.user.id).select('firstName lastName username');
-        const editorName =
-          [editor?.firstName, editor?.lastName].filter(Boolean).join(' ') || editor?.username || 'An editor';
+    // 🟢 NON-BLOCKING: record the audit entry after responding
+    setImmediate(() => {
+      writeAuditLog({
+        req,
+        action: 'blog.editor_proposal',
+        targetModel: 'Blog',
+        targetId: updated._id,
+        targetLabel: updated.title,
+        detail: { version, changes: summarizeChanges(changes), writerNotified: emailOutcome.writerNotified },
+      });
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
-        const writers = await User.find({
-          _id: { $in: [updated.originalAuthor, updated.author] },
-        }).select('email firstName');
+/**
+ * POST /api/editor/blogs/:id/proposal/notify-writer
+ * The editor who proposed the pending changes emails the writer about them again, e.g. after a failed send.
+ */
+exports.notifyWriterOfProposal = async (req, res, next) => {
+  try {
+    const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false }).select(
+      '+editorProposals title originalAuthor author publishConsentStatus editorModifications'
+    );
+    if (!blog) return res.status(404).json({ error: 'Article not found' });
 
-        const changeLabels = summarizeChanges(changes);
-        const changeItems = describeChanges(changes);
-        const reviewLink = `${process.env.FRONTEND_URL}/creator/proposals/${updated._id}`;
+    if (blog.publishConsentStatus !== 'pending' || !blog.editorModifications) {
+      return res.status(409).json({ error: 'There is no pending editor proposal to send.' });
+    }
 
-        const results = await Promise.allSettled(
-          writers
-            .filter((writer) => writer.email)
-            .map((writer) =>
-              sendEditorProposalEmail(writer.email, writer.firstName, updated.title, {
-                editorName,
-                changeLabels,
-                changeItems,
-                reviewLink,
-              })
-            )
-        );
-        results
-          .filter((result) => result.status === 'rejected')
-          .forEach((result) => console.error('Editor proposal email failed:', result.reason?.message || result.reason));
+    const isAdmin = req.user.role === ROLES.ADMIN;
+    if (!isAdmin && blog.editorModifications.editor?.toString() !== req.user.id) {
+      return res.status(403).json({ error: 'Only the editor who proposed these changes can email the writer.' });
+    }
 
-        writeAuditLog({
-          req,
-          action: 'blog.editor_proposal',
-          targetModel: 'Blog',
-          targetId: updated._id,
-          targetLabel: updated.title,
-          detail: { version, changes: changeLabels },
-        });
-      } catch (asyncErr) {
-        console.error('Non-blocking editor proposal email/audit failed:', asyncErr);
-      }
+    const version = blog.editorModifications.version;
+    const record = blog.editorProposals.find((proposal) => proposal.version === version && proposal.status === 'pending');
+    if (!record) return res.status(409).json({ error: 'There is no pending editor proposal to send.' });
+
+    const changes = diffSnapshots(record.baseline, record.proposal);
+    const outcome = await emailWritersAboutProposal(blog, req.user.id, changes);
+
+    res.json({
+      message: outcome.writerNotified
+        ? 'The writer has been emailed about the pending proposal.'
+        : `The writer was not emailed (${outcome.writerEmailError}).`,
+      writerNotified: outcome.writerNotified,
+      writerEmailError: outcome.writerEmailError,
     });
   } catch (error) {
     next(error);

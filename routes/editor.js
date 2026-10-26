@@ -370,5 +370,13 @@ proposalRouter.put(
   asyncHandler(editorBlogController.updateBlogByEditor)
 );
 
+// Emails the writer about the pending proposal again (e.g. after a failed send).
+proposalRouter.post(
+  '/:id/proposal/notify-writer',
+  protect,
+  authorize(ROLES.EDITOR, ROLES.ADMIN),
+  asyncHandler(editorBlogController.notifyWriterOfProposal)
+);
+
 module.exports = router;
 module.exports.proposalRouter = proposalRouter;
