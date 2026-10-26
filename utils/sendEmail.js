@@ -9,8 +9,10 @@ async function sendViaResend({ from, to, subject, html }) {
     throw new Error('RESEND_API_KEY is not configured');
   }
 
+  // A hung connection fails after 10 seconds instead of leaving the request waiting.
   const response = await fetch(RESEND_API_URL, {
     method: 'POST',
+    signal: AbortSignal.timeout(10000),
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',

@@ -1096,11 +1096,37 @@ exports.reviewBlog = async (req, res, next) => {
 
     await blog.save();
 
+    // Email the author before responding, so a failed send is reported to the reviewer instead of only logged.
+    // The decision is already saved, so a failed email does not undo it.
+    let authorNotified = false;
+    let authorEmailError = null;
+    if (blog.originalAuthor?.email) {
+      try {
+        if (decision === 'approved') {
+          await sendBlogApprovalEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title);
+        } else {
+          await sendBlogRejectionEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title, note);
+        }
+        authorNotified = true;
+      } catch (emailErr) {
+        authorEmailError = emailErr.message;
+        console.error(`Author review email failed for blog ${blog._id}:`, emailErr.message);
+      }
+    } else {
+      authorEmailError = 'The author has no email address on file.';
+    }
+
+    const baseMessage =
+      decision === 'approved'
+        ? 'Blog approved. It now awaits publishing by an authorized publisher.'
+        : 'Blog rejected and returned to draft with your comment.';
+
     res.json({
-      message:
-        decision === 'approved'
-          ? 'Blog approved. It now awaits publishing by an authorized publisher.'
-          : 'Blog rejected and returned to draft with your comment.',
+      message: authorNotified
+        ? baseMessage
+        : `${baseMessage} The author was not emailed (${authorEmailError}). Please tell them directly.`,
+      authorNotified,
+      authorEmailError,
       blog,
     });
 
@@ -1118,19 +1144,14 @@ exports.reviewBlog = async (req, res, next) => {
           if (alerts.length > 0) await Notification.insertMany(alerts);
         }
 
-        if (blog.originalAuthor?.email) {
-          if (decision === 'approved') {
-            await sendBlogApprovalEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title);
-          } else {
-            await sendBlogRejectionEmail(blog.originalAuthor.email, blog.originalAuthor.firstName, blog.title, note);
-            await Notification.create({
-              recipient: blog.originalAuthor._id || blog.originalAuthor,
-              sender: req.user.id,
-              type: 'CHANGE_REQUEST',
-              message: `Reviewer asked for changes on "${blog.title}": ${note}`,
-              article: blog._id,
-            });
-          }
+        if (decision === 'rejected' && blog.originalAuthor) {
+          await Notification.create({
+            recipient: blog.originalAuthor._id || blog.originalAuthor,
+            sender: req.user.id,
+            type: 'CHANGE_REQUEST',
+            message: `Reviewer asked for changes on "${blog.title}": ${note}`,
+            article: blog._id,
+          });
         }
 
         writeAuditLog({

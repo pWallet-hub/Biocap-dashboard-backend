@@ -418,7 +418,9 @@ router.get('/my-submissions', protect, authorize(...CREATORS), asyncHandler(blog
  *       403: { description: Not allowed to view this blog }
  *       404: { description: Blog not found }
  */
-router.get('/:id', protect, asyncHandler(blogController.getBlogById));
+// Only ObjectIds match here. Other names fall through to later routers, e.g. /api/editor/blogs/review-queue.
+const requireObjectId = (req, res, next) => (/^[0-9a-fA-F]{24}$/.test(req.params.id) ? next() : next('route'));
+router.get('/:id', requireObjectId, protect, asyncHandler(blogController.getBlogById));
 
 // ─── Create ────────────────────────────────────────────────────────────────────
 
