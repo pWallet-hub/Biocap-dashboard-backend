@@ -4,7 +4,7 @@ const AuditLog = require('../models/AuditLog');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
-const { sendStoryPublishedToEditorEmail, publicUrl } = require('../utils/sendEmail');
+const { sendStoryPublishedToEditorEmail, sendStoryUnpublishedEmail, publicUrl } = require('../utils/sendEmail');
 const { notifyUsersByRole } = require('../utils/notify');
 
 // Emails every active editor that the story is published. Failures are logged per editor, not thrown.
@@ -27,6 +27,24 @@ const emailEditorsAboutPublication = async (blog, userId) => {
       console.error(`Publish email to editor ${recipients[index].email} failed:`, result.reason?.message || result.reason);
     }
   });
+};
+
+// Emails the writer that the story was taken off the website. Errors are logged, not thrown.
+const emailAuthorAboutUnpublishing = async (blog, userId) => {
+  try {
+    const [actor, author] = await Promise.all([
+      User.findById(userId).select('firstName lastName username').lean(),
+      User.findById(blog.originalAuthor?._id || blog.originalAuthor || blog.author?._id || blog.author)
+        .select('email firstName')
+        .lean(),
+    ]);
+    if (!author?.email) return;
+
+    const unpublishedBy = [actor?.firstName, actor?.lastName].filter(Boolean).join(' ') || actor?.username || 'An editor';
+    await sendStoryUnpublishedEmail(author.email, author.firstName, blog.title, { unpublishedBy });
+  } catch (err) {
+    console.error('Unpublish email to writer failed:', err.message);
+  }
 };
 
 // Handle Post-Publish Background Side-Effects
@@ -93,6 +111,8 @@ blogEventBus.on('blog:unpublished', async ({ blog, userId }) => {
         })
       );
     }
+
+    tasks.push(emailAuthorAboutUnpublishing(blog, userId));
 
     await Promise.allSettled(tasks);
   } catch (err) {

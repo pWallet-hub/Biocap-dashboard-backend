@@ -12,6 +12,8 @@ const {
   sendBlogRejectionEmail,
   sendBlogPublishedEmail,
   sendEditorProposalDecisionEmail,
+  sendStoryInReviewEmail,
+  publicUrl,
 } = require('../utils/sendEmail');
 const { htmlToBlocks } = require('../utils/htmlToBlocks');
 const { cacheGet, cacheSet, cacheDel } = require('../utils/cache');
@@ -1032,6 +1034,29 @@ exports.getDeletedBlogs = async (req, res) => {
 
 // ─── Workflow Actions ──────────────────────────────────────────────────────────
 
+// Emails every active editor that a story is waiting in the review queue. Errors are logged, not thrown.
+const emailEditorsAboutSubmission = async (blog, writerId) => {
+  try {
+    const [writer, editors] = await Promise.all([
+      User.findById(writerId).select('firstName lastName username').lean(),
+      User.find({ role: ROLES.EDITOR, isActive: true }).select('email firstName').lean(),
+    ]);
+    const writerName = [writer?.firstName, writer?.lastName].filter(Boolean).join(' ') || writer?.username || 'A writer';
+    const reviewLink = publicUrl('/editor/review');
+
+    const results = await Promise.allSettled(
+      editors
+        .filter((editor) => editor.email)
+        .map((editor) => sendStoryInReviewEmail(editor.email, editor.firstName, blog.title, { writerName, reviewLink }))
+    );
+    results.forEach((result) => {
+      if (result.status === 'rejected') console.error('Review-queue email to editor failed:', result.reason?.message || result.reason);
+    });
+  } catch (err) {
+    console.error('Review-queue emails failed:', err.message);
+  }
+};
+
 exports.submitBlog = async (req, res) => {
   const blog = await Blog.findOne({ _id: req.params.id, isDeleted: false });
   if (!blog) return res.status(404).json({ error: 'Blog not found' });
@@ -1066,6 +1091,9 @@ exports.submitBlog = async (req, res) => {
     article: blog._id,
     sender: req.user.id,
   });
+
+  // Editors are emailed when the writer has finished and the story enters the review queue.
+  setImmediate(() => emailEditorsAboutSubmission(blog, req.user.id));
 
   res.json({
     message: wasRejectedBefore ? 'Blog resubmitted for review' : 'Blog submitted for review',

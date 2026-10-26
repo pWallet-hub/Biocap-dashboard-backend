@@ -83,7 +83,7 @@ test('sendEditorProposalEmail shows added and deleted text inline, escaped, with
   });
 
   const html = calls[0].body.html;
-  assert.match(html, /<span style="[^"]*text-decoration: underline[^"]*">new name<\/span>/);
+  assert.match(html, /<span style="[^"]*text-decoration:underline[^"]*">new name<\/span>/);
   assert.match(html, /<span style="[^"]*line-through[^"]*">old&lt;name&gt;<\/span>/);
   assert.doesNotMatch(html, /old<name>/);
   assert.match(html, /href="https:\/\/biocap.example\/creator\/proposals\/abc123"/);
@@ -224,4 +224,25 @@ test('publicUrl builds links on the public site and refuses localhost', () => {
 
   delete process.env.FRONTEND_URL;
   assert.throws(() => publicUrl('/creator/my-stories'), /FRONTEND_URL is not set/);
+});
+
+test('new templates escape user text and every email carries a plain-text copy', async () => {
+  const { sendStoryUnpublishedEmail, sendStoryInReviewEmail } = require('../utils/sendEmail');
+  process.env.RESEND_FROM = 'Biocap <noreply@blog.example.org>';
+  process.env.FRONTEND_URL = 'https://biocap.example';
+  const calls = mockFetch(() => okResponse());
+
+  await sendStoryUnpublishedEmail('ann@example.org', 'Ann', 'Story <b>x</b>', { unpublishedBy: 'Eve <editor>' });
+  await sendStoryInReviewEmail('eve@example.org', 'Eve', 'Draft <i>y</i>', {
+    writerName: 'Ann <writer>',
+    reviewLink: 'https://biocap.example/editor/review',
+  });
+
+  assert.equal(calls[0].body.subject, 'Your story "Story <b>x</b>" was unpublished');
+  assert.match(calls[0].body.html, /Eve &lt;editor&gt;/);
+  assert.doesNotMatch(calls[0].body.html, /<b>x<\/b>/);
+  assert.match(calls[1].body.html, /href="https:\/\/biocap.example\/editor\/review"/);
+  assert.match(calls[1].body.html, /Ann &lt;writer&gt;/);
+  assert.ok(calls[1].body.text.includes('A story is waiting for review'));
+  assert.doesNotMatch(calls[1].body.text, /&(lt|gt|amp|quot|#39);/);
 });

@@ -32,6 +32,27 @@ function resolveSender(value, fromRESEND_FROM) {
   );
 }
 
+// Plain-text copy of an HTML email, sent with it for mail clients that do not show HTML.
+const htmlToText = (html) =>
+  String(html)
+    .replace(/<head[\s\S]*?<\/head>/gi, '')
+    .replace(/<div style="display:none[\s\S]*?<\/div>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<li[^>]*>/gi, '- ')
+    .replace(/<\/(p|h1|h2|h3|li|div|tr|table)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&bull;/g, '•')
+    .replace(/&copy;/g, '©')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
 // Sends one email through the Resend HTTP API.
 // Set RESEND_API_KEY (required) and RESEND_FROM (optional, a sender on a domain verified in Resend).
 // Without RESEND_FROM, the sender passed by each caller is used.
@@ -56,6 +77,7 @@ async function sendViaResend({ from, to, subject, html }) {
       to: [to],
       subject,
       html,
+      text: htmlToText(html),
     }),
   });
 
@@ -77,254 +99,222 @@ const escapeHtml = (value) =>
     "'": '&#39;',
   })[char]);
 
-// ─── Shared layout wrapper ────────────────────────────────────────────────────
-const wrapHtml = (content) => `
-  <html>
-    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: auto;">
-      ${content}
-      <hr style="border: none; border-top: 1px solid #eee; margin: 25px 0;" />
-      <p style="font-size: 12px; color: #999;">
-        This is an automated message from Biocap. Please do not reply directly to this email.
-      </p>
-    </body>
-  </html>
-`;
+// ─── Design system ────────────────────────────────────────────────────────────
+// Table-based layout with inline styles, so it renders the same in common mail clients.
+const NAVY = '#1B3A5C';
+const GOLD = '#A9812F';
+const INK = '#1E2620';
+const MUTED = '#6B7268';
+const LINE = '#E2DDCF';
+const PAPER = '#FAF9F5';
 
-// ─── 1. Account Creation / Credentials Email ─────────────────────────────────
+const paragraph = (html) =>
+  `<p style="margin:0 0 16px 0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;color:${INK};">${html}</p>`;
+
+const muted = (html) =>
+  `<p style="margin:16px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:1.6;color:${MUTED};">${html}</p>`;
+
+// Rows of [label, value]. Values are HTML, so callers escape any user text they include.
+const detailTable = (rows) => `
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 8px 0;border-collapse:collapse;">
+    ${rows
+      .map(
+        ([label, value]) => `
+    <tr>
+      <td width="150" valign="top" style="padding:10px 12px 10px 0;border-bottom:1px solid ${LINE};font-family:Arial,Helvetica,sans-serif;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;color:${MUTED};">${escapeHtml(label)}</td>
+      <td valign="top" style="padding:10px 0;border-bottom:1px solid ${LINE};font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.5;color:${INK};">${value}</td>
+    </tr>`
+      )
+      .join('')}
+  </table>`;
+
+const callout = (html, accent = NAVY) =>
+  `<div style="margin:16px 0;padding:14px 18px;background:${PAPER};border-left:4px solid ${accent};font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;color:${INK};">${html}</div>`;
+
+const button = (label, url) => `
+  <table role="presentation" cellpadding="0" cellspacing="0" style="margin:24px 0 0 0;">
+    <tr>
+      <td style="background:${NAVY};">
+        <a href="${escapeHtml(url)}" style="display:inline-block;padding:13px 28px;font-family:Arial,Helvetica,sans-serif;font-size:14px;font-weight:bold;color:#FFFFFF;text-decoration:none;">${escapeHtml(label)}</a>
+      </td>
+    </tr>
+  </table>
+  <p style="margin:12px 0 0 0;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.5;color:${MUTED};word-break:break-all;">
+    If the button does not work, paste this link into your browser:<br/>
+    <a href="${escapeHtml(url)}" style="color:${NAVY};">${escapeHtml(url)}</a>
+  </p>`;
+
+// Shared frame: brand bar, eyebrow, heading, body, and a footer. The heading is escaped here.
+const wrapHtml = ({ preheader = '', eyebrow = '', heading, body }) => `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${escapeHtml(heading)}</title>
+  </head>
+  <body style="margin:0;padding:0;background:#F3F2ED;">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">${escapeHtml(preheader)}</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#F3F2ED;padding:28px 12px;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#FFFFFF;border:1px solid ${LINE};">
+            <tr>
+              <td style="background:${NAVY};padding:22px 32px;">
+                <div style="font-family:Georgia,'Times New Roman',serif;font-size:24px;font-style:italic;color:#FFFFFF;">Biocap</div>
+                <div style="margin-top:4px;font-family:Arial,Helvetica,sans-serif;font-size:11px;letter-spacing:1px;text-transform:uppercase;color:#D9D4C6;">Rwanda Biotech Capacity Building Project</div>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px 32px 28px 32px;">
+                ${eyebrow ? `<div style="font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:bold;letter-spacing:1.5px;text-transform:uppercase;color:${GOLD};">${escapeHtml(eyebrow)}</div>` : ''}
+                <h1 style="margin:8px 0 18px 0;font-family:Georgia,'Times New Roman',serif;font-size:24px;line-height:1.3;font-weight:normal;color:${INK};">${escapeHtml(heading)}</h1>
+                ${body}
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:18px 32px;border-top:1px solid ${LINE};background:${PAPER};font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:1.6;color:${MUTED};">
+                You are receiving this email because you have an account on the Biocap publishing platform.
+                This message was sent automatically, so please do not reply to it.<br/>
+                &copy; ${new Date().getFullYear()} Biocap, Rwanda Biotech Capacity Building Project
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+
+const sendFrom = (email, subject, html) =>
+  sendViaResend({
+    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
+    to: email,
+    subject,
+    html,
+  });
+
+const greeting = (firstName) => paragraph(`Hello ${escapeHtml(firstName || 'there')},`);
+
+// ─── 1. Account setup ────────────────────────────────────────────────────────
 async function sendCredentialsEmail(email, firstName, tempPassword, token) {
   const resetLink = `${publicUrl('/auth/reset-password')}?token=${token}`;
 
-  const html = wrapHtml(`
-    <h3 style="color: #1a73e8;">Welcome to Biocap, ${escapeHtml(firstName)}!</h3>
-    <p>Your account has been successfully registered.</p>
-
-    <div style="background: #f9f9f9; padding: 15px; border-left: 4px solid #1a73e8; margin: 15px 0;">
-      <strong>Your Temporary Credentials:</strong><br/>
-      &bull; <strong>Email:</strong> ${escapeHtml(email)}<br/>
-      &bull; <strong>Temporary Password:</strong> <code style="font-size: 15px;">${tempPassword}</code>
-    </div>
-
-    <p style="color: #d93025; font-weight: bold;">
-      ⚠️ Action Required: This temporary password expires in <u>30 minutes</u>.
-      You must reset it before logging in.
-    </p>
-
-    <p>When you click the button below, you will be taken to a password reset page where you will:</p>
-    <ol>
-      <li>Enter your <strong>temporary password</strong> shown above</li>
-      <li>Choose a <strong>new password</strong></li>
-      <li>Confirm your new password</li>
-    </ol>
-
-    <p>
-      <a href="${resetLink}"
-         style="background-color: #1a73e8; color: white; padding: 12px 24px;
-                text-decoration: none; border-radius: 5px; display: inline-block;
-                font-weight: bold; font-size: 15px;">
-        Reset Your Password →
-      </a>
-    </p>
-
-    <p style="font-size: 13px; color: #666; margin-top: 25px;">
-      If the button doesn't work, copy and paste this link into your browser:<br/>
-      <a href="${resetLink}" style="color: #1a73e8; word-break: break-all;">${resetLink}</a>
-    </p>
-
-    <p style="font-size: 12px; color: #999; margin-top: 15px;">
-      If you did not request this account, please ignore this email or contact support.
-    </p>
-  `);
-
-  await sendViaResend({
-    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
-    to: email,
-    subject: 'Action Required: Setup Your Biocap Account (Expires in 30 min)',
-    html,
+  const html = wrapHtml({
+    preheader: 'Set your password to activate your Biocap account. The link expires in 30 minutes.',
+    eyebrow: 'Account setup',
+    heading: `Welcome to Biocap, ${firstName || 'there'}`,
+    body: `
+      ${paragraph('Your Biocap account has been created. Use the temporary password below to set your own password.')}
+      ${detailTable([
+        ['Email', escapeHtml(email)],
+        ['Temporary password', `<code style="font-size:14px;">${escapeHtml(tempPassword)}</code>`],
+      ])}
+      ${callout('This temporary password expires in <strong>30 minutes</strong>. You must set a new password before you can sign in.', GOLD)}
+      ${button('Set my password', resetLink)}
+      ${muted('If you did not expect this account, you can ignore this email or contact your administrator.')}`,
   });
+
+  await sendFrom(email, 'Set up your Biocap account (expires in 30 minutes)', html);
 }
 
-// ─── 2. Password Reset Email ────────────────────────────────────────────────
+// ─── 2. Password reset ───────────────────────────────────────────────────────
 async function sendPasswordResetEmail(email, firstName, token) {
   const resetLink = `${publicUrl('/auth/reset-password')}?token=${token}`;
 
-  const html = wrapHtml(`
-    <h3 style="color: #1a73e8;">Password Reset Request</h3>
-    <p>Hello ${escapeHtml(firstName || 'there')},</p>
-    <p>We received a request to reset your Biocap password.</p>
-    <p>Click the button below to choose a new password. This link will expire in <strong>30 minutes</strong>.</p>
-
-    <p>
-      <a href="${resetLink}"
-         style="background-color: #1a73e8; color: white; padding: 12px 24px;
-                text-decoration: none; border-radius: 5px; display: inline-block;
-                font-weight: bold; font-size: 15px;">
-        Reset My Password →
-      </a>
-    </p>
-
-    <p style="font-size: 13px; color: #666; margin-top: 25px;">
-      If you did not request this, you can safely ignore this email.
-    </p>
-  `);
-
-  await sendViaResend({
-    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
-    to: email,
-    subject: '🔐 Biocap password reset request',
-    html,
+  const html = wrapHtml({
+    preheader: 'Use the link to choose a new password. It expires in 30 minutes.',
+    eyebrow: 'Security',
+    heading: 'Reset your password',
+    body: `
+      ${greeting(firstName)}
+      ${paragraph('We received a request to reset the password for your Biocap account. Choose a new password with the button below.')}
+      ${callout('This link expires in <strong>30 minutes</strong>.')}
+      ${button('Reset my password', resetLink)}
+      ${muted('If you did not request this, you can ignore this email. Your password will not change.')}`,
   });
+
+  await sendFrom(email, 'Reset your Biocap password', html);
 }
 
-// ─── 3. Blog Approved Email ───────────────────────────────────────────────────
+// ─── 3. Story approved (to writer) ───────────────────────────────────────────
 async function sendBlogApprovalEmail(email, firstName, blogTitle) {
-  const dashboardLink = `${publicUrl('/creator/my-stories')}`;
-
-  const html = wrapHtml(`
-    <h3 style="color: #0f9d58;">🎉 Great News, ${escapeHtml(firstName)}!</h3>
-    <p>Your blog post has been <strong>reviewed and approved</strong> by our editorial team.</p>
-
-    <div style="background: #f0fff4; padding: 15px; border-left: 4px solid #0f9d58; margin: 15px 0;">
-      <strong>Blog Title:</strong> ${escapeHtml(blogTitle)}
-    </div>
-
-    <p>
-      Your post is now in the <strong>approved</strong> queue and will be published to the
-      live Biocap website shortly by our team.
-    </p>
-
-    <p>
-      <a href="${dashboardLink}"
-         style="background-color: #0f9d58; color: white; padding: 12px 24px;
-                text-decoration: none; border-radius: 5px; display: inline-block;
-                font-weight: bold; font-size: 15px;">
-        View My Submissions →
-      </a>
-    </p>
-
-    <p style="font-size: 13px; color: #666;">
-      Thank you for contributing to the Biocap community!
-    </p>
-  `);
-
-  await sendViaResend({
-    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
-    to: email,
-    subject: `✅ Your blog "${blogTitle}" has been approved`,
-    html,
+  const html = wrapHtml({
+    preheader: `Your story "${blogTitle}" has been approved and is waiting to be published.`,
+    eyebrow: 'Story approved',
+    heading: 'Your story has been approved',
+    body: `
+      ${greeting(firstName)}
+      ${paragraph('Our editorial team has reviewed your story and approved it. It is now waiting to be published.')}
+      ${detailTable([['Story', escapeHtml(blogTitle)], ['Status', 'Approved, awaiting publication']])}
+      ${button('View my stories', publicUrl('/creator/my-stories'))}
+      ${muted('Thank you for contributing to Biocap.')}`,
   });
+
+  await sendFrom(email, `Your story "${blogTitle}" has been approved`, html);
 }
 
-// ─── 4. Blog Rejected Email ───────────────────────────────────────────────────
+// ─── 4. Story needs revision (to writer) ─────────────────────────────────────
 async function sendBlogRejectionEmail(email, firstName, blogTitle, reviewerNote) {
-  const dashboardLink = `${publicUrl('/creator/my-stories')}`;
-
-  const html = wrapHtml(`
-    <h3 style="color: #d93025;">Blog Post Needs Revision — ${escapeHtml(firstName)}</h3>
-    <p>
-      Thank you for your submission. After careful review, our editorial team has
-      returned your blog post for revisions.
-    </p>
-
-    <div style="background: #fff8f7; padding: 15px; border-left: 4px solid #d93025; margin: 15px 0;">
-      <strong>Blog Title:</strong> ${escapeHtml(blogTitle)}<br/>
-      <strong>Reviewer's Note:</strong><br/>
-      <em style="color: #555;">"${escapeHtml(reviewerNote)}"</em>
-    </div>
-
-    <p>
-      Your blog has been moved back to <strong>draft</strong> status. Please make the
-      suggested revisions and resubmit when ready.
-    </p>
-
-    <p>
-      <a href="${dashboardLink}"
-         style="background-color: #1a73e8; color: white; padding: 12px 24px;
-                text-decoration: none; border-radius: 5px; display: inline-block;
-                font-weight: bold; font-size: 15px;">
-        Edit My Blog →
-      </a>
-    </p>
-
-    <p style="font-size: 13px; color: #666;">
-      If you believe this decision was made in error, please contact your communications officer.
-    </p>
-  `);
-
-  await sendViaResend({
-    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
-    to: email,
-    subject: `📝 Your blog "${blogTitle}" needs revisions`,
-    html,
+  const html = wrapHtml({
+    preheader: `Your story "${blogTitle}" needs revisions before it can be published.`,
+    eyebrow: 'Revision requested',
+    heading: 'Your story needs revisions',
+    body: `
+      ${greeting(firstName)}
+      ${paragraph('Thank you for your submission. After review, our editorial team has returned your story so the changes below can be made.')}
+      ${detailTable([['Story', escapeHtml(blogTitle)], ['Status', 'Returned to draft']])}
+      ${callout(`<strong>Reviewer's note</strong><br/><em>&ldquo;${escapeHtml(reviewerNote)}&rdquo;</em>`, '#B65C4B')}
+      ${paragraph('Make the changes and submit the story again when you are ready.')}
+      ${button('Revise my story', publicUrl('/creator/my-stories'))}
+      ${muted('If you believe this decision was made in error, please contact your communications officer.')}`,
   });
+
+  await sendFrom(email, `Your story "${blogTitle}" needs revisions`, html);
 }
 
-// ─── 5. Blog Published Email ──────────────────────────────────────────────────
+// ─── 5. Story published (to writer) ──────────────────────────────────────────
 async function sendBlogPublishedEmail(email, firstName, blogTitle, blogSlug) {
-  const blogLink = `${publicUrl(`/Stewardship-News/${blogSlug}`)}`;
-
-  const html = wrapHtml(`
-    <h3 style="color: #1a73e8;">🚀 Your Blog is Live, ${escapeHtml(firstName)}!</h3>
-    <p>Congratulations! Your blog post has been published to the Biocap website.</p>
-
-    <div style="background: #f0f4ff; padding: 15px; border-left: 4px solid #1a73e8; margin: 15px 0;">
-      <strong>Blog Title:</strong> ${escapeHtml(blogTitle)}
-    </div>
-
-    <p>
-      <a href="${blogLink}"
-         style="background-color: #1a73e8; color: white; padding: 12px 24px;
-                text-decoration: none; border-radius: 5px; display: inline-block;
-                font-weight: bold; font-size: 15px;">
-        View Live Blog Post →
-      </a>
-    </p>
-
-    <p style="font-size: 13px; color: #666;">
-      Share it with your audience! Thank you for contributing to Biocap.
-    </p>
-  `);
-
-  await sendViaResend({
-    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
-    to: email,
-    subject: `🚀 Your blog "${blogTitle}" is now live!`,
-    html,
+  const html = wrapHtml({
+    preheader: `Your story "${blogTitle}" is now live on the Biocap website.`,
+    eyebrow: 'Now live',
+    heading: 'Your story is now live',
+    body: `
+      ${greeting(firstName)}
+      ${paragraph('Your story has been published on the Biocap website.')}
+      ${detailTable([['Story', escapeHtml(blogTitle)], ['Status', 'Published']])}
+      ${button('View the live story', publicUrl(`/Stewardship-News/${blogSlug}`))}
+      ${muted('Share it with your audience. Thank you for contributing to Biocap.')}`,
   });
+
+  await sendFrom(email, `Your story "${blogTitle}" is now live`, html);
 }
 
-// ─── 6. Password Changed Security Alert ──────────────────────────────────────
-async function sendPasswordChangedEmail(email, firstName) {
-  const html = wrapHtml(`
-    <h3 style="color: #f4b400;">🔒 Security Alert — ${escapeHtml(firstName)}</h3>
-    <p>Your Biocap account password was successfully changed.</p>
-
-    <div style="background: #fffde7; padding: 15px; border-left: 4px solid #f4b400; margin: 15px 0;">
-      <strong>Time:</strong> ${new Date().toUTCString()}<br/>
-      <strong>Action:</strong> Password successfully updated
-    </div>
-
-    <p>
-      If you did <strong>not</strong> make this change, please contact your administrator
-      immediately to secure your account.
-    </p>
-
-    <p style="font-size: 13px; color: #666;">
-      For security, this notification was sent to your registered email address.
-    </p>
-  `);
-
-  await sendViaResend({
-    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
-    to: email,
-    subject: '🔒 Your Biocap password was changed',
-    html,
+// ─── 6. Story unpublished (to writer) ────────────────────────────────────────
+async function sendStoryUnpublishedEmail(email, firstName, blogTitle, { unpublishedBy, note }) {
+  const html = wrapHtml({
+    preheader: `Your story "${blogTitle}" has been taken off the Biocap website.`,
+    eyebrow: 'Unpublished',
+    heading: 'Your story was unpublished',
+    body: `
+      ${greeting(firstName)}
+      ${paragraph(`<strong>${escapeHtml(unpublishedBy)}</strong> removed your story from the Biocap website. It is no longer publicly visible.`)}
+      ${detailTable([
+        ['Story', escapeHtml(blogTitle)],
+        ['Status', 'Unpublished'],
+        ['Changed by', escapeHtml(unpublishedBy)],
+      ])}
+      ${note ? callout(`<strong>Note from the editor</strong><br/><em>&ldquo;${escapeHtml(note)}&rdquo;</em>`, '#B65C4B') : ''}
+      ${button('View my stories', publicUrl('/creator/my-stories'))}
+      ${muted('If you have questions, please contact your communications officer.')}`,
   });
+
+  await sendFrom(email, `Your story "${blogTitle}" was unpublished`, html);
 }
 
-// ─── 7. Editor Proposal Ready (to writer) ────────────────────────────────────
+// ─── 7. Editor proposal ready (to writer) ────────────────────────────────────
 // Marks used in the email. Inline styles only, since email clients drop <style> blocks.
-const INSERT_STYLE = 'background: #d7f5e0; color: #0b5a2a; text-decoration: underline; text-decoration-color: #0f9d58;';
-const DELETE_STYLE = 'background: #fde7e5; color: #a50e0e; text-decoration: line-through;';
+const INSERT_STYLE = 'background:#d7f5e0;color:#0b5a2a;text-decoration:underline;text-decoration-color:#0f9d58;';
+const DELETE_STYLE = 'background:#fde7e5;color:#a50e0e;text-decoration:line-through;';
 
 // Renders one diff segment list with added text highlighted and removed text struck through.
 const renderSegments = (segments) =>
@@ -337,154 +327,140 @@ const renderSegments = (segments) =>
     })
     .join('');
 
+const changeBlock = (item) => `
+  <div style="margin:14px 0;">
+    <p style="margin:0 0 6px 0;font-family:Arial,Helvetica,sans-serif;font-size:11px;font-weight:bold;letter-spacing:1px;text-transform:uppercase;color:${NAVY};">${escapeHtml(item.label)}</p>
+    <div style="padding:12px 14px;background:#FFFFFF;border:1px solid ${LINE};font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.7;color:${INK};white-space:pre-wrap;">${renderSegments(item.segments)}${item.truncated ? ' …' : ''}</div>
+    ${item.truncated ? muted('Long text was shortened here. Open the review page to see all of it.') : ''}
+  </div>`;
+
 // changeItems: from describeChanges(), e.g. [{ label: 'Title', segments: [...], truncated: false }]
 // changeLabels: short names from summarizeChanges(), used when no detailed items are given.
 async function sendEditorProposalEmail(email, firstName, blogTitle, { editorName, changeLabels = [], changeItems = [], reviewLink }) {
-  const detailed = changeItems.length > 0;
+  const changes =
+    changeItems.length > 0
+      ? changeItems.map(changeBlock).join('')
+      : `<ul style="margin:8px 0 0 0;padding-left:20px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:${INK};">${
+          changeLabels.map((label) => `<li>${escapeHtml(label)}</li>`).join('') || '<li>No field-level changes listed</li>'
+        }</ul>`;
 
-  const changeBlocks = detailed
-    ? changeItems
-        .map(
-          (item) => `
-            <div style="margin: 12px 0;">
-              <p style="margin: 0 0 4px 0; font-size: 12px; font-weight: bold; text-transform: uppercase; color: #1a73e8;">
-                ${escapeHtml(item.label)}
-              </p>
-              <p style="margin: 0; padding: 8px 10px; background: #ffffff; border: 1px solid #e3e6ea; white-space: pre-wrap;">${renderSegments(item.segments)}${item.truncated ? ' …' : ''}</p>
-              ${item.truncated ? '<p style="margin: 4px 0 0 0; font-size: 12px; color: #666;">Long text was shortened here. Open the review page to see all of it.</p>' : ''}
-            </div>`
-        )
-        .join('')
-    : `<ul style="margin: 8px 0 0 0;">${changeLabels.map((label) => `<li>${escapeHtml(label)}</li>`).join('') || '<li>No field-level changes listed</li>'}</ul>`;
-
-  const html = wrapHtml(`
-    <h3 style="color: #1a73e8;">Editor Changes Ready for Your Review, ${escapeHtml(firstName || 'there')}</h3>
-    <p>
-      <strong>${escapeHtml(editorName)}</strong> has proposed changes to your article.
-      Nothing is published yet. Please review the changes below and decide whether to accept them.
-    </p>
-
-    <p style="font-size: 13px; color: #444;">
-      <span style="${INSERT_STYLE} padding: 0 3px;">Added</span>
-      &nbsp;&nbsp;
-      <span style="${DELETE_STYLE} padding: 0 3px;">Deleted</span>
-    </p>
-
-    <div style="background: #f0f4ff; padding: 15px; border-left: 4px solid #1a73e8; margin: 15px 0;">
-      <strong>Blog Title:</strong> ${escapeHtml(blogTitle)}<br/>
-      <strong>Changes:</strong>
-      ${changeBlocks}
-    </div>
-
-    <p>
-      <a href="${escapeHtml(reviewLink)}"
-         style="background-color: #1a73e8; color: white; padding: 12px 24px;
-                text-decoration: none; border-radius: 5px; display: inline-block;
-                font-weight: bold; font-size: 15px;">
-        Review Editor Changes →
-      </a>
-    </p>
-    <p style="font-size: 13px; color: #666;">
-      Your story stays unchanged until you decide. Accepting applies every change. Rejecting any change returns the
-      proposal to the editor with your reason.
-    </p>
-  `);
-
-  await sendViaResend({
-    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
-    to: email,
-    subject: `Review editor changes to "${blogTitle}"`,
-    html,
+  const html = wrapHtml({
+    preheader: `${editorName} proposed changes to "${blogTitle}". Review them before anything is applied.`,
+    eyebrow: 'Changes for your review',
+    heading: 'Editor changes are ready for your review',
+    body: `
+      ${greeting(firstName)}
+      ${paragraph(`<strong>${escapeHtml(editorName)}</strong> has proposed changes to your story. Nothing is published yet, and your story stays as you wrote it until you decide.`)}
+      ${detailTable([['Story', escapeHtml(blogTitle)]])}
+      <p style="margin:16px 0 4px 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;color:${MUTED};">
+        <span style="${INSERT_STYLE} padding:0 4px;">Added</span>&nbsp;&nbsp;<span style="${DELETE_STYLE} padding:0 4px;">Deleted</span>
+      </p>
+      ${changes}
+      ${button('Review the changes', reviewLink)}
+      ${muted('Accepting applies every change. Rejecting any change removes the editor\'s changes from your story and sends the editor your reason.')}`,
   });
+
+  await sendFrom(email, `Review editor changes to "${blogTitle}"`, html);
 }
 
-// ─── 8. Writer Decision on Editor Proposal (to editor) ───────────────────────
+// ─── 8. Writer decision on editor proposal (to editor) ───────────────────────
 async function sendEditorProposalDecisionEmail(email, firstName, blogTitle, { approved, writerName, note, changeLabels }) {
-  const accentColor = approved ? '#0f9d58' : '#d93025';
+  const accent = approved ? '#0f9d58' : '#B65C4B';
   const changeItems = changeLabels.map((label) => `<li>${escapeHtml(label)}</li>`).join('');
 
-  const html = wrapHtml(`
-    <h3 style="color: ${accentColor};">
-      ${approved ? 'Your Changes Were Accepted' : 'Your Changes Were Rejected'}, ${escapeHtml(firstName || 'there')}
-    </h3>
-    <p>
-      <strong>${escapeHtml(writerName)}</strong>
-      ${approved ? 'accepted' : 'rejected'} the editor changes you proposed.
-    </p>
-
-    <div style="background: #f9f9f9; padding: 15px; border-left: 4px solid ${accentColor}; margin: 15px 0;">
-      <strong>Blog Title:</strong> ${escapeHtml(blogTitle)}<br/>
-      <strong>Status:</strong> ${approved ? 'Approved, ready for publishing' : 'Returned to draft'}<br/>
-      ${changeItems ? `<strong>Proposed changes:</strong><ul style="margin: 8px 0 0 0;">${changeItems}</ul>` : ''}
-      ${note ? `<strong>Writer's Note:</strong><br/><em style="color: #555;">"${escapeHtml(note)}"</em>` : ''}
-    </div>
-  `);
-
-  await sendViaResend({
-    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
-    to: email,
-    subject: `${approved ? 'Accepted' : 'Rejected'}: editor changes to "${blogTitle}"`,
-    html,
+  const html = wrapHtml({
+    preheader: `${writerName} ${approved ? 'accepted' : 'rejected'} your changes to "${blogTitle}".`,
+    eyebrow: approved ? 'Changes accepted' : 'Changes rejected',
+    heading: approved ? 'Your changes were accepted' : 'Your changes were rejected',
+    body: `
+      ${greeting(firstName)}
+      ${paragraph(`<strong>${escapeHtml(writerName)}</strong> ${approved ? 'accepted' : 'rejected'} the editor changes you proposed.`)}
+      ${detailTable([
+        ['Story', escapeHtml(blogTitle)],
+        ['Status', approved ? 'Approved, ready for publishing' : 'Returned to draft'],
+      ])}
+      ${changeItems ? `<p style="margin:16px 0 4px 0;font-family:Arial,Helvetica,sans-serif;font-size:13px;font-weight:bold;color:${NAVY};">Proposed changes</p><ul style="margin:0 0 12px 0;padding-left:20px;font-family:Arial,Helvetica,sans-serif;font-size:14px;color:${INK};">${changeItems}</ul>` : ''}
+      ${note ? callout(`<strong>Writer's note</strong><br/><em>&ldquo;${escapeHtml(note)}&rdquo;</em>`, accent) : ''}
+      ${muted('No further action is needed unless the writer asks for more changes.')}`,
   });
+
+  await sendFrom(email, `${approved ? 'Accepted' : 'Rejected'}: editor changes to "${blogTitle}"`, html);
 }
 
-// ─── 9. Editor Proposal Withdrawn (to writer) ───────────────────────────────
+// ─── 9. Editor proposal withdrawn (to writer) ───────────────────────────────
 async function sendEditorProposalWithdrawnEmail(email, firstName, blogTitle, { editorName }) {
-  const html = wrapHtml(`
-    <h3 style="color: #5f6368;">Editor Changes Withdrawn, ${escapeHtml(firstName || 'there')}</h3>
-    <p>
-      <strong>${escapeHtml(editorName)}</strong> withdrew the proposed changes to your article.
-      Nothing was changed, and no decision is needed from you.
-    </p>
-
-    <div style="background: #f9f9f9; padding: 15px; border-left: 4px solid #5f6368; margin: 15px 0;">
-      <strong>Blog Title:</strong> ${escapeHtml(blogTitle)}
-    </div>
-  `);
-
-  await sendViaResend({
-    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
-    to: email,
-    subject: `Editor changes withdrawn for "${blogTitle}"`,
-    html,
+  const html = wrapHtml({
+    preheader: `${editorName} withdrew the proposed changes to "${blogTitle}". No decision is needed.`,
+    eyebrow: 'Changes withdrawn',
+    heading: 'Editor changes were withdrawn',
+    body: `
+      ${greeting(firstName)}
+      ${paragraph(`<strong>${escapeHtml(editorName)}</strong> withdrew the proposed changes to your story. Nothing was changed, and no decision is needed from you.`)}
+      ${detailTable([['Story', escapeHtml(blogTitle)], ['Status', 'Withdrawn']])}
+      ${muted('You can keep working on your story as usual.')}`,
   });
+
+  await sendFrom(email, `Editor changes withdrawn for "${blogTitle}"`, html);
 }
 
-// ─── 10. Story Published (to editors) ────────────────────────────────────────
+// ─── 10. Story published (to editors) ────────────────────────────────────────
 async function sendStoryPublishedToEditorEmail(email, firstName, blogTitle, { publishedBy, storyLink }) {
-  const html = wrapHtml(`
-    <h3 style="color: #0f9d58;">Story Published, ${escapeHtml(firstName || 'there')}</h3>
-    <p>
-      <strong>${escapeHtml(publishedBy)}</strong> published a story. It is now live on the Biocap website.
-    </p>
-
-    <div style="background: #f0fff4; padding: 15px; border-left: 4px solid #0f9d58; margin: 15px 0;">
-      <strong>Story Title:</strong> ${escapeHtml(blogTitle)}
-    </div>
-
-    <p>
-      <a href="${escapeHtml(storyLink)}"
-         style="background-color: #0f9d58; color: white; padding: 12px 24px;
-                text-decoration: none; border-radius: 5px; display: inline-block;
-                font-weight: bold; font-size: 15px;">
-        View Published Story →
-      </a>
-    </p>
-  `);
-
-  await sendViaResend({
-    from: `"${process.env.MAIL_FROM_NAME}" <${process.env.MAIL_FROM}>`,
-    to: email,
-    subject: `Published: "${blogTitle}"`,
-    html,
+  const html = wrapHtml({
+    preheader: `"${blogTitle}" is now live on the Biocap website.`,
+    eyebrow: 'Published',
+    heading: 'A story was published',
+    body: `
+      ${greeting(firstName)}
+      ${paragraph(`<strong>${escapeHtml(publishedBy)}</strong> published a story. It is now live on the Biocap website.`)}
+      ${detailTable([['Story', escapeHtml(blogTitle)], ['Status', 'Published']])}
+      ${button('View the published story', storyLink)}`,
   });
+
+  await sendFrom(email, `Published: "${blogTitle}"`, html);
+}
+
+// ─── 11. New story waiting for review (to editors) ──────────────────────────
+async function sendStoryInReviewEmail(email, firstName, blogTitle, { writerName, reviewLink }) {
+  const html = wrapHtml({
+    preheader: `${writerName} submitted "${blogTitle}" for review.`,
+    eyebrow: 'Review queue',
+    heading: 'A story is waiting for review',
+    body: `
+      ${greeting(firstName)}
+      ${paragraph(`<strong>${escapeHtml(writerName)}</strong> has finished the story and submitted it for review.`)}
+      ${detailTable([['Story', escapeHtml(blogTitle)], ['Author', escapeHtml(writerName)], ['Status', 'Waiting for review']])}
+      ${button('Open the review queue', reviewLink)}
+      ${muted('Review the story and approve it, request changes, or leave it in the queue.')}`,
+  });
+
+  await sendFrom(email, `Story ready for review: "${blogTitle}"`, html);
+}
+
+// ─── Password changed (security alert) ──────────────────────────────────────
+async function sendPasswordChangedEmail(email, firstName) {
+  const html = wrapHtml({
+    preheader: 'Your Biocap password was just changed. If this was not you, contact your administrator.',
+    eyebrow: 'Security alert',
+    heading: 'Your password was changed',
+    body: `
+      ${greeting(firstName)}
+      ${paragraph('The password for your Biocap account was changed successfully.')}
+      ${detailTable([['Time', escapeHtml(new Date().toUTCString())], ['Action', 'Password updated']])}
+      ${callout('If you did not make this change, contact your administrator immediately so your account can be secured.', '#B65C4B')}
+      ${muted('This notification was sent to the email address on your account.')}`,
+  });
+
+  await sendFrom(email, 'Your Biocap password was changed', html);
 }
 
 module.exports = {
   publicUrl,
+  sendPasswordChangedEmail,
   sendStoryPublishedToEditorEmail,
+  sendStoryInReviewEmail,
+  sendStoryUnpublishedEmail,
   sendCredentialsEmail,
-  sendPasswordResetEmail, // ✅ Added missing export!
+  sendPasswordResetEmail,
   sendBlogApprovalEmail,
   sendBlogRejectionEmail,
   sendBlogPublishedEmail,
