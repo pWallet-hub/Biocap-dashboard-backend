@@ -33,6 +33,28 @@ if (process.env.NODE_ENV === 'production' && weakSecrets.length > 0) {
   console.error(`These secrets must be at least 32 characters in production: ${weakSecrets.join(', ')}`);
   process.exit(1);
 }
+if (process.env.NODE_ENV === 'production') {
+  // Browser-facing addresses must be HTTPS, or sign-in cookies and tokens would travel in clear text.
+  const insecure = [
+    ['FRONTEND_URL', (process.env.FRONTEND_URL || '').split(',').map((o) => o.trim()).filter(Boolean).every((o) => o.startsWith('https://'))],
+    ['AFS_PORTAL_URL', !process.env.AFS_SSO_ENABLED || process.env.AFS_SSO_ENABLED !== 'true' || (process.env.AFS_PORTAL_URL || '').startsWith('https://')],
+    ['AFS_OIDC_REDIRECT_URI', !process.env.AFS_SSO_ENABLED || process.env.AFS_SSO_ENABLED !== 'true' || (process.env.AFS_OIDC_REDIRECT_URI || '').startsWith('https://')],
+    ['AFS_OIDC_ISSUER', !process.env.AFS_SSO_ENABLED || process.env.AFS_SSO_ENABLED !== 'true' || (process.env.AFS_OIDC_ISSUER || '').startsWith('https://')],
+  ].filter(([, ok]) => !ok).map(([name]) => name);
+  if (insecure.length > 0) {
+    console.error(`These addresses must be https:// in production: ${insecure.join(', ')}`);
+    process.exit(1);
+  }
+}
+// With AFS single sign-on on, every AFS setting must be present and valid before the server starts (not on first sign-in).
+if (process.env.AFS_SSO_ENABLED === 'true') {
+  try {
+    require('./services/afsSso').ssoConfig();
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
+}
 
 const app = express();
 
