@@ -260,6 +260,9 @@ router.post('/login', authLimiter, async (req, res) => {
       });
     }
 
+    // Accounts that sign in only through AFS SSO have no password to check.
+    if (!user.password) return res.status(401).json({ message: 'Invalid credentials' });
+
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) return res.status(401).json({ message: 'Invalid credentials' });
 
@@ -437,6 +440,13 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
       return res.status(403).json({ message: 'This account has been deactivated. Contact an administrator.' });
     }
 
+    // AFS SSO accounts have no Biocap password to reset. Answer the same way, and send nothing.
+    if (user.keycloakSub) {
+      return res.status(200).json({
+        message: 'If an account exists for this email, a password reset link has been sent.',
+      });
+    }
+
     const resetToken = createResetToken(user.email);
     sendPasswordResetEmail(user.email, user.firstName, resetToken).catch((err) =>
       console.error('[Email] Failed to send password reset email:', err.message)
@@ -555,6 +565,7 @@ router.post('/change-password', protect, async (req, res) => {
 
     const user = await User.findById(req.user.id);
     if (!user) return res.status(404).json({ message: 'User not found' });
+    if (!user.password) return res.status(400).json({ message: 'This account signs in through AFS SSO and has no Biocap password.' });
 
     const isMatch = await bcrypt.compare(actualCurrent, user.password);
     if (!isMatch) {
