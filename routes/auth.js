@@ -11,22 +11,12 @@ const { pickProfileFields, validateRoleSpecificFields } = require('../middleware
 const { writeAuditLog } = require('../utils/auditLogger');
 const { ROLES, ALL_ROLES } = require('../constants/roles');
 
-const ACCESS_TOKEN_EXPIRES_IN = '7d';
 const RESET_TOKEN_EXPIRES_IN = '30m';
 const PASSWORD_EXPIRY_DAYS = parseInt(process.env.PASSWORD_EXPIRY_DAYS || '90', 10);
 
 // ─── Token helpers ─────────────────────────────────────────────────────────────
-function createAccessToken(user) {
-  return jwt.sign(
-    { id: user._id, username: user.username, role: user.role },
-    process.env.JWT_SECRET,
-    { expiresIn: ACCESS_TOKEN_EXPIRES_IN }
-  );
-}
-
-function createRefreshToken() {
-  return crypto.randomBytes(40).toString('hex');
-}
+const { ACCESS_TOKEN_EXPIRES_IN, SSO_ACCESS_TOKEN_EXPIRES_IN, createAccessToken, createRefreshToken } = require('../services/tokens');
+const { ssoConfig, requireAccess, SsoFailure } = require('../services/afsSso');
 
 function createResetToken(email) {
   return jwt.sign(
@@ -341,7 +331,7 @@ router.post('/refresh', async (req, res) => {
       return res.status(400).json({ message: 'refreshToken and userId are required' });
     }
 
-    const user = await User.findById(userId).select('refreshToken role username isActive');
+    const user = await User.findById(userId).select('refreshToken role username isActive keycloakSub');
     if (!user || !user.isActive) {
       return res.status(401).json({ message: 'Invalid token or inactive account' });
     }
@@ -351,8 +341,25 @@ router.post('/refresh', async (req, res) => {
       return res.status(401).json({ message: 'Refresh token is invalid or has expired' });
     }
 
-    const accessToken = createAccessToken(user);
-    res.json({ accessToken, expiresIn: ACCESS_TOKEN_EXPIRES_IN });
+    let accessLifetime = ACCESS_TOKEN_EXPIRES_IN;
+    if (user.keycloakSub) {
+      // AFS SSO account: Command Center decides again on every refresh, and the role is re-applied from it.
+      // A removed assignment ends the session here. If AFS cannot be reached, the session ends too (fails closed).
+      try {
+        const cfg = ssoConfig();
+        if (!cfg) throw new SsoFailure('disabled');
+        user.role = await requireAccess(cfg, user.keycloakSub);
+        await user.save({ validateModifiedOnly: true });
+      } catch {
+        user.refreshToken = null;
+        await user.save({ validateModifiedOnly: true });
+        return res.status(401).json({ message: 'Your access to Biocap has ended. Sign in again.' });
+      }
+      accessLifetime = SSO_ACCESS_TOKEN_EXPIRES_IN;
+    }
+
+    const accessToken = createAccessToken(user, accessLifetime);
+    res.json({ accessToken, expiresIn: accessLifetime });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

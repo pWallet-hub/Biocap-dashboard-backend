@@ -19,8 +19,7 @@ const galleryRoutes = require('./routes/gallery');
 require('./services/blogEventListener');
 
 // Fail fast on missing configuration instead of failing later on the first request that needs it
-// MONGO_URI is optional: config/db.js falls back to its hardcoded connection string.
-const requiredEnv = ['JWT_SECRET', 'REFRESH_TOKEN_SECRET'];
+const requiredEnv = ['MONGO_URI', 'JWT_SECRET', 'REFRESH_TOKEN_SECRET'];
 if (process.env.NODE_ENV === 'production') {
   requiredEnv.push('FRONTEND_URL', 'RESEND_API_KEY', 'RESEND_FROM', 'CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET');
 }
@@ -480,6 +479,7 @@ app.use('/api/upload/signature', require('./routes/signature'));
 const blogRouter = require('./routes/blog');
 
 // Primary App Mount Points
+app.use('/api/auth/sso', require('./routes/sso'));
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/blogs', blogRouter);
 app.use('/api/gallery', galleryRoutes);
