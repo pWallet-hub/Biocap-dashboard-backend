@@ -1,16 +1,25 @@
 # API and Redis. MongoDB is the URL in MONGO_URI (from .env or the hosting platform). Secrets come from .env.
 # The API starts even if Redis is down: it falls back to per-process cache and rate limits.
+#
+# Coolify: Docker Compose build pack, this file, domain https://biocapapi.afs-rwanda.org on the `api` service (port
+# 5000). No host port is published here; docker-compose.override.yml (local only) publishes 5000 on this machine.
+# Deploy AFS Command Center first: it creates the shared `afs-internal` network the API joins for AFS SSO.
 services:
   api:
     build: .
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       NODE_ENV: production
       PORT: 5000
       TRUST_PROXY: 1
       REDIS_URL: redis://redis:6379
-    ports:
-      - "5000:5000"
+    expose: ["5000"]
+    # `afs` reaches AFS Command Center's access check (AFS_COMMAND_CENTER_URL) and Keycloak (AFS_OIDC_INTERNAL_ISSUER)
+    # privately. Command Center blocks /api/internal/ on its public address, and the host does not let containers reach
+    # its own public address.
+    networks: [default, afs]
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:5000/health/live').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 30s
@@ -30,6 +39,13 @@ services:
       timeout: 3s
       retries: 5
     restart: unless-stopped
+
+networks:
+  # Shared with AFS Command Center, which creates it. Only the API joins it. Locally, docker-compose.override.yml
+  # replaces it with a private network.
+  afs:
+    name: afs-internal
+    external: true
 
 volumes:
   redis-data:

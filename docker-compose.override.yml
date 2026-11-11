@@ -1,0 +1,11 @@
+# Local development only (docker compose loads this file automatically; Coolify uses docker-compose.yml alone).
+services:
+  api:
+    ports:
+      - "5000:5000"
+
+# Production joins the shared `afs-internal` network (external). Locally there is none, so use a private one.
+networks:
+  afs:
+    name: biocap-afs-local
+    external: false
