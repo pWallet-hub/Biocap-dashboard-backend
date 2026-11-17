@@ -48,7 +48,11 @@ const UserSchema = new mongoose.Schema(
   {
     username: { type: String, required: true, trim: true, unique: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
-    password: { type: String, required: true },
+    // Required unless the account signs in only through AFS SSO (keycloakSub is set).
+    password: { type: String, required: function () { return !this.keycloakSub; } },
+
+    // Keycloak subject of the linked AFS identity. Set when the account is linked to AFS SSO.
+    keycloakSub: { type: String, unique: true, sparse: true, index: true, trim: true },
 
     role: {
       type: String,

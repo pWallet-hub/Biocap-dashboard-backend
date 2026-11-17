@@ -15,7 +15,7 @@ const protect = async (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
 
     const user = await User.findById(decoded.id).select('isActive role username');
     if (!user || !user.isActive) {
@@ -42,7 +42,7 @@ const optionalProtect = async (req, res, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] });
     const user = await User.findById(decoded.id).select('isActive role username');
     if (user && user.isActive) {
       req.user = { id: decoded.id, username: decoded.username, role: user.role };

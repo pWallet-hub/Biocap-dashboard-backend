@@ -11,7 +11,11 @@ async function seedAdmin() {
     throw new Error('MONGO_URI or MONGODB_URI missing in environment variables');
   }
 
-  const jwtSecret = process.env.JWT_SECRET || 'fallback_secret_key_for_dev_only';
+  // No development fallback: a token signed with a known secret would be accepted by any instance that shares it.
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret) {
+    throw new Error('JWT_SECRET is missing in environment variables');
+  }
 
   console.log('🔌 Connecting to database...');
   await mongoose.connect(mongoUri);
