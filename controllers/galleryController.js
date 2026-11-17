@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const Gallery = require('../models/Gallery');
 const cloudinary = require('../config/cloudinary');
+const { writeAuditLog } = require('../utils/auditLogger');
 
 /**
  * Helper to extract Cloudinary Public ID from a secure URL
@@ -169,6 +170,15 @@ exports.createGalleryItem = async (req, res) => {
 
       await newVideo.save();
 
+      await writeAuditLog({
+        req,
+        action: 'gallery.create',
+        targetModel: 'Gallery',
+        targetId: newVideo._id,
+        targetLabel: newVideo.title,
+        detail: { mediaType: newVideo.mediaType, category: newVideo.category },
+      });
+
       return res.status(201).json({
         success: true,
         message: 'Video entry published successfully.',
@@ -224,6 +234,19 @@ exports.createGalleryItem = async (req, res) => {
       });
 
       await newFolder.save();
+
+      await writeAuditLog({
+        req,
+        action: 'gallery.create',
+        targetModel: 'Gallery',
+        targetId: newFolder._id,
+        targetLabel: newFolder.title,
+        detail: {
+          mediaType: newFolder.mediaType,
+          category: newFolder.category,
+          imageCount: newFolder.images.length,
+        },
+      });
 
       return res.status(201).json({
         success: true,
@@ -363,6 +386,14 @@ exports.publishGalleryItem = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Gallery item not found.' });
     }
 
+    await writeAuditLog({
+      req,
+      action: 'gallery.publish',
+      targetModel: 'Gallery',
+      targetId: item._id,
+      targetLabel: item.title,
+    });
+
     return res.status(200).json({
       success: true,
       message: 'Gallery item is now visible on the website.',
@@ -390,6 +421,14 @@ exports.unpublishGalleryItem = async (req, res) => {
     if (!item) {
       return res.status(404).json({ success: false, message: 'Gallery item not found.' });
     }
+
+    await writeAuditLog({
+      req,
+      action: 'gallery.unpublish',
+      targetModel: 'Gallery',
+      targetId: item._id,
+      targetLabel: item.title,
+    });
 
     return res.status(200).json({
       success: true,
@@ -425,10 +464,21 @@ exports.updateGalleryItem = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Gallery item not found.' });
     }
 
+    const updatedFields = [];
+
     // Update Text Metadata
-    if (title) item.title = title.trim();
-    if (category) item.category = category;
-    if (caption) item.caption = caption.trim();
+    if (title) {
+      item.title = title.trim();
+      updatedFields.push('title');
+    }
+    if (category) {
+      item.category = category;
+      updatedFields.push('category');
+    }
+    if (caption) {
+      item.caption = caption.trim();
+      updatedFields.push('caption');
+    }
 
     // Update Video stream or Thumbnail if new files are attached
     if (item.mediaType === 'video') {
@@ -436,12 +486,14 @@ exports.updateGalleryItem = async (req, res) => {
         const oldVideoId = getPublicIdFromUrl(item.videoUrl);
         if (oldVideoId) await cloudinary.uploader.destroy(oldVideoId, { resource_type: 'video' });
         item.videoUrl = req.files.video[0].path;
+        updatedFields.push('video');
       }
 
       if (req.files?.thumbnail?.[0]) {
         const oldThumbId = getPublicIdFromUrl(item.thumbnailUrl);
         if (oldThumbId) await cloudinary.uploader.destroy(oldThumbId, { resource_type: 'image' });
         item.thumbnailUrl = req.files.thumbnail[0].path;
+        updatedFields.push('thumbnail');
       }
     }
 
@@ -469,6 +521,7 @@ exports.updateGalleryItem = async (req, res) => {
         }));
 
         item.images.push(...newImages);
+        updatedFields.push('images');
       }
 
       // Explicitly re-assign which image is the cover, by its referenceId.
@@ -483,10 +536,20 @@ exports.updateGalleryItem = async (req, res) => {
         item.images.forEach((img) => {
           img.isCover = img.referenceId === coverReferenceId;
         });
+        updatedFields.push('coverImage');
       }
     }
 
     await item.save();
+
+    await writeAuditLog({
+      req,
+      action: 'gallery.update',
+      targetModel: 'Gallery',
+      targetId: item._id,
+      targetLabel: item.title,
+      detail: { updatedFields },
+    });
 
     return res.status(200).json({
       success: true,
@@ -516,6 +579,15 @@ exports.deleteGalleryItem = async (req, res) => {
     // Purge physical files from Cloudinary storage before dropping MongoDB record
     await purgeCloudinaryAssets(item);
     await item.deleteOne();
+
+    await writeAuditLog({
+      req,
+      action: 'gallery.delete',
+      targetModel: 'Gallery',
+      targetId: item._id,
+      targetLabel: item.title,
+      detail: { mediaType: item.mediaType },
+    });
 
     return res.status(200).json({
       success: true,

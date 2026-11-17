@@ -75,7 +75,7 @@ const seedBlog = (overrides = {}) => ({
   ...overrides,
 });
 
-// Waits for the non-blocking email and audit work that the controllers schedule with setImmediate.
+// Waits for asynchronous email and notification side effects scheduled after responses.
 const settle = () => new Promise((resolve) => setTimeout(resolve, 150));
 
 test(

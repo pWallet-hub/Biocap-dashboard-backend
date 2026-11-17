@@ -282,6 +282,127 @@ const swaggerOptions = {
           },
         },
 
+        // --- Audit History Domain ---
+        AuditActor: {
+          type: 'object',
+          description: 'Populated actor details. This is null for anonymous events or deleted accounts.',
+          nullable: true,
+          properties: {
+            _id: { type: 'string', example: '66a12345bc67890123456789' },
+            username: { type: 'string', example: 'admin-user' },
+            firstName: { type: 'string', example: 'Alice' },
+            lastName: { type: 'string', example: 'Mukamana' },
+            role: { type: 'string', enum: ['admin', 'communication_officer', 'editor', 'social_media_content_creator', 'media_correspondent', 'principal_investigator'] },
+          },
+        },
+        AuditLogEntry: {
+          type: 'object',
+          required: ['_id', 'actorRole', 'action', 'targetModel', 'targetId', 'timestamp'],
+          properties: {
+            _id: { type: 'string', example: '67a12345bc67890123456789' },
+            actor: {
+              oneOf: [
+                { type: 'string', description: 'Actor ID when not populated.' },
+                { $ref: '#/components/schemas/AuditActor' },
+              ],
+              nullable: true,
+            },
+            actorRole: {
+              type: 'string',
+              enum: ['admin', 'communication_officer', 'editor', 'social_media_content_creator', 'media_correspondent', 'principal_investigator', 'system', 'anonymous'],
+              example: 'admin',
+            },
+            actorLabel: { type: 'string', example: 'Alice Mukamana', description: 'Stored name snapshot, available even if the actor account is deleted.' },
+            action: {
+              type: 'string',
+              example: 'user.create',
+              description: 'Namespaced action. The full current action catalog and recommended display labels are documented in the Audit history API section of README.md.',
+            },
+            targetModel: { type: 'string', enum: ['Blog', 'User', 'Gallery'], example: 'User' },
+            targetId: { type: 'string', example: '66b98765dc43210987654321' },
+            targetLabel: { type: 'string', example: 'jane.creator', description: 'Human-readable target label captured at the time of the action.' },
+            detail: {
+              type: 'object',
+              nullable: true,
+              additionalProperties: true,
+              example: { role: 'editor', updatedFields: ['firstName', 'organization'] },
+              description: 'Optional action-specific context. Credential request fields and raw request bodies are excluded; selected workflow actions may include business notes.',
+            },
+            ip: { type: 'string', example: '192.0.2.10' },
+            userAgent: { type: 'string', example: 'Mozilla/5.0' },
+            requestMethod: { type: 'string', example: 'PATCH' },
+            requestPath: { type: 'string', example: '/api/admin/users/66b98765dc43210987654321/role' },
+            timestamp: { type: 'string', format: 'date-time', example: '2026-11-17T15:00:00.000Z' },
+          },
+        },
+        AuditPagination: {
+          type: 'object',
+          required: ['page', 'limit', 'total', 'totalPages', 'hasNextPage', 'hasPrevPage'],
+          properties: {
+            page: { type: 'integer', example: 1 },
+            limit: { type: 'integer', maximum: 100, example: 20 },
+            total: { type: 'integer', example: 57 },
+            totalPages: { type: 'integer', example: 3 },
+            hasNextPage: { type: 'boolean', example: true },
+            hasPrevPage: { type: 'boolean', example: false },
+          },
+        },
+        AuditLogListResponse: {
+          type: 'object',
+          required: ['data', 'pagination'],
+          properties: {
+            data: { type: 'array', items: { $ref: '#/components/schemas/AuditLogEntry' } },
+            pagination: { $ref: '#/components/schemas/AuditPagination' },
+          },
+        },
+        BlogAuditTrailResponse: {
+          type: 'object',
+          required: ['count', 'logs'],
+          properties: {
+            count: { type: 'integer', example: 3 },
+            logs: { type: 'array', items: { $ref: '#/components/schemas/AuditLogEntry' } },
+          },
+        },
+        UserAuditTrailResponse: {
+          type: 'object',
+          required: ['actionsOnThisUser', 'actionsPerformedByThisUser'],
+          properties: {
+            actionsOnThisUser: { type: 'array', items: { $ref: '#/components/schemas/AuditLogEntry' } },
+            actionsPerformedByThisUser: { type: 'array', items: { $ref: '#/components/schemas/AuditLogEntry' } },
+          },
+        },
+        DashboardLoginActivity: {
+          type: 'object',
+          properties: {
+            _id: { type: 'string', example: '66a12345bc67890123456789' },
+            username: { type: 'string', example: 'jane.creator' },
+            firstName: { type: 'string', example: 'Jane' },
+            lastName: { type: 'string', example: 'Uwase' },
+            role: { type: 'string', example: 'media_correspondent' },
+            lastLoginAt: { type: 'string', format: 'date-time' },
+            loginCount: { type: 'integer', example: 12 },
+          },
+        },
+        AdminDashboardResponse: {
+          type: 'object',
+          required: ['users', 'blogs', 'pendingUserReviews', 'pendingBlogReviews', 'readyToPublish', 'recentActivity'],
+          properties: {
+            users: { type: 'object', additionalProperties: { type: 'object', properties: { total: { type: 'integer' }, active: { type: 'integer' } } } },
+            blogs: { type: 'object', additionalProperties: { type: 'integer' }, example: { draft: 12, published: 4, deleted: 1 } },
+            pendingUserReviews: { type: 'integer', example: 3 },
+            pendingBlogReviews: { type: 'integer', example: 2 },
+            readyToPublish: { type: 'integer', example: 1 },
+            recentActivity: {
+              type: 'object',
+              required: ['lastLogins', 'actions'],
+              properties: {
+                lastLogins: { type: 'array', description: 'Up to five users with the most recent login activity.', items: { $ref: '#/components/schemas/DashboardLoginActivity' } },
+                actions: { type: 'array', description: 'Ten most recent audit events, newest first.', items: { $ref: '#/components/schemas/AuditLogEntry' } },
+              },
+            },
+          },
+        },
+
         // --- Media & Cloudinary Domain ---
         CloudinarySignatureResponse: {
           type: 'object',

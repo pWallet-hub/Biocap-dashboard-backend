@@ -1,6 +1,5 @@
 // services/blogEventListener.js
 const blogEventBus = require('../config/eventBus');
-const AuditLog = require('../models/AuditLog');
 const Notification = require('../models/Notification');
 const User = require('../models/User');
 const { ROLES } = require('../constants/roles');
@@ -53,12 +52,6 @@ blogEventBus.on('blog:published', async ({ blog, userId }) => {
     const authorId = blog?.author?._id || blog?.author || blog?.originalAuthor?._id || blog?.originalAuthor;
 
     const tasks = [
-      AuditLog.create({
-        user: userId,
-        action: 'PUBLISH_BLOG',
-        targetId: blog._id,
-        details: `Published article: "${blog.title}"`,
-      }),
       emailEditorsAboutPublication(blog, userId),
       notifyUsersByRole([ROLES.EDITOR, ROLES.ADMIN], {
         type: 'STORY_PUBLISHED',
@@ -91,14 +84,7 @@ blogEventBus.on('blog:unpublished', async ({ blog, userId }) => {
   try {
     const authorId = blog?.author?._id || blog?.author || blog?.originalAuthor?._id || blog?.originalAuthor;
 
-    const tasks = [
-      AuditLog.create({
-        user: userId,
-        action: 'UNPUBLISH_BLOG',
-        targetId: blog._id,
-        details: `Unpublished article: "${blog.title}"`,
-      }),
-    ];
+    const tasks = [];
 
     if (authorId) {
       tasks.push(

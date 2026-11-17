@@ -90,7 +90,7 @@ exports.createUser = async (req, res) => {
       isPasswordResetRequired: false,
     });
 
-    writeAuditLog({
+    await writeAuditLog({
       req,
       action: 'user.create',
       targetModel: 'User',
@@ -138,7 +138,7 @@ exports.updateUser = async (req, res) => {
 
   await user.save();
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'user.update',
     targetModel: 'User',
@@ -173,7 +173,7 @@ exports.changeUserRole = async (req, res) => {
   if (organizationLink) user.organizationLink = organizationLink;
   await user.save();
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'user.role_change',
     targetModel: 'User',
@@ -192,7 +192,7 @@ exports.deactivateUser = async (req, res) => {
   const user = await User.findByIdAndUpdate(req.params.id, { isActive: false }, { returnDocument: 'after' }).select('-password -refreshToken');
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'user.deactivate',
     targetModel: 'User',
@@ -207,7 +207,7 @@ exports.reactivateUser = async (req, res) => {
   const user = await User.findByIdAndUpdate(req.params.id, { isActive: true }, { returnDocument: 'after' }).select('-password -refreshToken');
   if (!user) return res.status(404).json({ error: 'User not found' });
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'user.reactivate',
     targetModel: 'User',
@@ -236,18 +236,19 @@ exports.deleteUser = async (req, res) => {
     });
   }
 
-  await Blog.deleteMany({
+  const deletedBlogs = await Blog.deleteMany({
     $or: [{ originalAuthor: user._id }, { author: user._id }],
     status: { $ne: 'published' },
   });
   await user.deleteOne();
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'user.delete',
     targetModel: 'User',
     targetId: user._id,
     targetLabel: user.username,
+    detail: { deletedUnpublishedBlogCount: deletedBlogs.deletedCount },
   });
 
   res.json({ message: 'User and their non-published blogs removed successfully' });
@@ -269,7 +270,7 @@ exports.resetUserPassword = async (req, res) => {
     console.error('Failed to send password reset email:', err.message)
   );
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'user.password_reset',
     targetModel: 'User',
@@ -283,7 +284,7 @@ exports.resetUserPassword = async (req, res) => {
 // ─── Dashboard stats ──────────────────────────────────────────────────────────
 
 exports.getDashboardStats = async (req, res) => {
-  const [userStats, blogStats, reviewQueueCount, recentLogins] = await Promise.all([
+  const [userStats, blogStats, reviewQueueCount, recentLogins, recentActions] = await Promise.all([
     User.aggregate([
       {
         $group: {
@@ -310,6 +311,11 @@ exports.getDashboardStats = async (req, res) => {
       .select('username firstName lastName role lastLoginAt loginCount')
       .sort({ lastLoginAt: -1 })
       .limit(5),
+    AuditLog.find({})
+      .sort({ timestamp: -1 })
+      .limit(10)
+      .populate('actor', 'username firstName lastName role')
+      .lean(),
   ]);
 
   const usersByRole = Object.fromEntries(
@@ -330,6 +336,7 @@ exports.getDashboardStats = async (req, res) => {
     readyToPublish: blogsByStatus.approved || 0,
     recentActivity: {
       lastLogins: recentLogins,
+      actions: recentActions,
     },
   });
 };
@@ -344,6 +351,7 @@ exports.getAuditLogs = async (req, res) => {
   if (req.query.actor) filter.actor = req.query.actor;
   if (req.query.targetModel) filter.targetModel = req.query.targetModel;
   if (req.query.targetId) filter.targetId = req.query.targetId;
+  if (req.query.actorRole) filter.actorRole = req.query.actorRole;
 
   if (req.query.from || req.query.to) {
     filter.timestamp = {};
@@ -378,11 +386,28 @@ exports.getUserAuditTrail = async (req, res) => {
       .populate('actor', 'username firstName lastName role'),
     AuditLog.find({ actor: req.params.id })
       .sort({ timestamp: -1 })
-      .limit(50),
+      .populate('actor', 'username firstName lastName role'),
   ]);
 
   res.json({
     actionsOnThisUser: asTarget,
     actionsPerformedByThisUser: asActor,
   });
+};
+
+exports.getGalleryAuditTrail = async (req, res) => {
+  const { page, limit, skip } = parsePagination(req.query);
+  const filter = { targetModel: 'Gallery', targetId: req.params.id };
+
+  const [logs, total] = await Promise.all([
+    AuditLog.find(filter)
+      .sort({ timestamp: -1 })
+      .skip(skip)
+      .limit(limit)
+      .populate('actor', 'username firstName lastName role')
+      .lean(),
+    AuditLog.countDocuments(filter),
+  ]);
+
+  res.json(paginatedResponse(logs, total, { page, limit }));
 };

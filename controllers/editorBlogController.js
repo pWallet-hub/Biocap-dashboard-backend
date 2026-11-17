@@ -169,6 +169,15 @@ exports.updateBlogByEditor = async (req, res, next) => {
       ? 'Editor proposal saved. The writer has been emailed to accept or reject the changes.'
       : `Editor proposal saved, but the writer was not emailed (${emailOutcome.writerEmailError}). Use "Email writer" to send it again.`;
 
+    await writeAuditLog({
+      req,
+      action: 'blog.editor_proposal',
+      targetModel: 'Blog',
+      targetId: updated._id,
+      targetLabel: updated.title,
+      detail: { version, changes: summarizeChanges(changes), writerNotified: emailOutcome.writerNotified },
+    });
+
     res.json({
       message,
       writerNotified: emailOutcome.writerNotified,
@@ -176,21 +185,12 @@ exports.updateBlogByEditor = async (req, res, next) => {
       blog: updated,
     });
 
-    // 🟢 NON-BLOCKING: record the audit entry after responding
     setImmediate(() => {
       notifyUsers([updated.originalAuthor, updated.author], {
         type: 'PROPOSAL_RECEIVED',
         message: `An editor proposed changes to "${updated.title}". Review them before they are applied.`,
         article: updated._id,
         sender: req.user.id,
-      });
-      writeAuditLog({
-        req,
-        action: 'blog.editor_proposal',
-        targetModel: 'Blog',
-        targetId: updated._id,
-        targetLabel: updated.title,
-        detail: { version, changes: summarizeChanges(changes), writerNotified: emailOutcome.writerNotified },
       });
     });
   } catch (error) {
@@ -224,6 +224,15 @@ exports.notifyWriterOfProposal = async (req, res, next) => {
 
     const changes = diffSnapshots(record.baseline, record.proposal);
     const outcome = await emailWritersAboutProposal(blog, req.user.id, changes);
+
+    await writeAuditLog({
+      req,
+      action: 'blog.editor_proposal_notification',
+      targetModel: 'Blog',
+      targetId: blog._id,
+      targetLabel: blog.title,
+      detail: { version, writerNotified: outcome.writerNotified },
+    });
 
     res.json({
       message: outcome.writerNotified
@@ -364,6 +373,15 @@ exports.withdrawEditorProposal = async (req, res, next) => {
       return res.status(409).json({ error: 'The proposal changed while withdrawing. Reload and try again.' });
     }
 
+    await writeAuditLog({
+      req,
+      action: 'blog.editor_proposal_withdrawn',
+      targetModel: 'Blog',
+      targetId: updated._id,
+      targetLabel: updated.title,
+      detail: { version: proposal.version ?? null },
+    });
+
     res.json({ message: 'Editor proposal withdrawn. The writer has been notified.', blog: updated });
 
     setImmediate(async () => {
@@ -389,16 +407,8 @@ exports.withdrawEditorProposal = async (req, res, next) => {
           sender: req.user.id,
         });
 
-        writeAuditLog({
-          req,
-          action: 'blog.editor_proposal_withdrawn',
-          targetModel: 'Blog',
-          targetId: updated._id,
-          targetLabel: updated.title,
-          detail: { version: proposal.version ?? null },
-        });
       } catch (asyncErr) {
-        console.error('Non-blocking withdraw email/audit failed:', asyncErr.message);
+        console.error('Non-blocking withdraw email failed:', asyncErr.message);
       }
     });
   } catch (error) {

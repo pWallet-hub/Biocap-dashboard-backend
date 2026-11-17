@@ -184,10 +184,11 @@ router.post('/register', authLimiter, async (req, res) => {
       isPasswordResetRequired: false,
     });
 
-    writeAuditLog({
+    await writeAuditLog({
       req,
       actor: newUser._id,
       actorRole: newUser.role,
+      actorLabel: newUser.username,
       action: 'user.create',
       targetModel: 'User',
       targetId: newUser._id,
@@ -286,10 +287,11 @@ router.post('/login', authLimiter, async (req, res) => {
 
     await user.save({ validateModifiedOnly: true });
 
-    writeAuditLog({
+    await writeAuditLog({
       req,
       actor: user._id,
       actorRole: user.role,
+      actorLabel: user.username,
       action: 'user.login',
       targetModel: 'User',
       targetId: user._id,
@@ -376,7 +378,7 @@ router.post('/logout', protect, async (req, res) => {
   try {
     await User.findByIdAndUpdate(req.user.id, { refreshToken: null });
 
-    writeAuditLog({
+    await writeAuditLog({
       req,
       action: 'user.logout',
       targetModel: 'User',
@@ -434,6 +436,14 @@ router.post('/forgot-password', authLimiter, async (req, res) => {
     sendPasswordResetEmail(user.email, user.firstName, resetToken).catch((err) =>
       console.error('[Email] Failed to send password reset email:', err.message)
     );
+
+    await writeAuditLog({
+      req,
+      action: 'user.password_reset_requested',
+      targetModel: 'User',
+      targetId: user._id,
+      targetLabel: user.username,
+    });
 
     res.status(200).json({
       message: 'If an account exists for this email, a password reset link has been sent.',
@@ -497,6 +507,18 @@ router.post('/reset-password', authLimiter, async (req, res) => {
     user.isPasswordResetRequired = false;
     user.refreshToken = null;
     await user.save({ validateModifiedOnly: true });
+
+    await writeAuditLog({
+      req,
+      actor: user._id,
+      actorRole: user.role,
+      actorLabel: user.username,
+      action: 'user.password_reset',
+      targetModel: 'User',
+      targetId: user._id,
+      targetLabel: user.username,
+      detail: { source: 'self_service' },
+    });
 
     res.json({ message: 'Password updated successfully. You can now log in via /api/auth/login.' });
   } catch (error) {
@@ -565,7 +587,7 @@ router.post('/change-password', protect, async (req, res) => {
       console.error('[Email] Failed to send password-changed alert:', err.message)
     );
 
-    writeAuditLog({
+    await writeAuditLog({
       req,
       action: 'user.password_change',
       targetModel: 'User',
@@ -697,6 +719,17 @@ router.put('/me', protect, async (req, res) => {
     }
 
     await user.save({ validateModifiedOnly: true });
+
+    if (Object.keys(updates).length > 0) {
+      await writeAuditLog({
+        req,
+        action: 'user.update',
+        targetModel: 'User',
+        targetId: user._id,
+        targetLabel: user.username,
+        detail: { updatedFields: Object.keys(updates) },
+      });
+    }
 
     const { password, refreshToken, ...safeUser } = user.toObject();
     res.json(safeUser);

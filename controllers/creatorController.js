@@ -206,11 +206,11 @@ exports.markChangeImplemented = async (req, res) => {
 
   await writeAuditLog({
     req,
-    action: 'CHANGE_IMPLEMENTED',
+    action: 'blog.mark_change_implemented',
     targetModel: 'Blog',
     targetId: blog._id,
     targetLabel: blog.title,
-    detail: { changeId: change._id.toString() },
+    detail: { changeId: String(change._id) },
   });
 
   res.json({ message: 'Change marked implemented', blog });

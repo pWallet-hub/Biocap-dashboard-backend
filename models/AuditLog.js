@@ -10,53 +10,27 @@ const AuditLogSchema = new mongoose.Schema(
     actor: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User',
-      required: true,
     },
     actorRole: {
       type: String,
-      enum: ALL_ROLES,
+      enum: [...ALL_ROLES, 'system', 'anonymous'],
       required: true,
     },
+    actorLabel: { type: String, trim: true, maxlength: 160 },
 
     // What happened
     action: {
       type: String,
-      enum: [
-        // Blog actions
-        'blog.create',
-        'blog.update',
-        'blog.delete',       // soft delete
-        'blog.hard_delete',  // permanent delete
-        'blog.restore',
-        'blog.submit',
-        'blog.review',       // approve or reject
-        'blog.publish',
-        'blog.unpublish',
-        'blog.editor_proposal',          // editor proposed a new version
-        'blog.editor_changes_accepted',  // writer accepted an editor proposal
-        'blog.editor_changes_rejected',  // writer rejected an editor proposal
-        'blog.editor_proposal_withdrawn', // editor withdrew a pending proposal
-
-        // User actions
-        'user.create',
-        'user.update',
-        'user.deactivate',
-        'user.reactivate',
-        'user.delete',
-        'user.role_change',
-        'user.review',
-        'user.password_reset',
-        'user.password_change',
-        'user.login',
-        'user.logout',
-      ],
+      trim: true,
+      maxlength: 100,
+      match: /^[a-z][a-z0-9_.-]*$/,
       required: true,
     },
 
     // What was affected
     targetModel: {
       type: String,
-      enum: ['Blog', 'User'],
+      enum: ['Blog', 'User', 'Gallery'],
       required: true,
     },
     targetId: {
@@ -73,6 +47,8 @@ const AuditLogSchema = new mongoose.Schema(
     // Request metadata
     ip: { type: String },
     userAgent: { type: String },
+    requestMethod: { type: String, maxlength: 10 },
+    requestPath: { type: String, maxlength: 500 },
   },
   {
     timestamps: { createdAt: 'timestamp', updatedAt: false },
@@ -80,6 +56,7 @@ const AuditLogSchema = new mongoose.Schema(
 );
 
 // Index for fast queries by actor, target, or action
+AuditLogSchema.index({ timestamp: -1 });
 AuditLogSchema.index({ actor: 1, timestamp: -1 });
 AuditLogSchema.index({ targetModel: 1, targetId: 1, timestamp: -1 });
 AuditLogSchema.index({ action: 1, timestamp: -1 });

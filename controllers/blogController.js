@@ -256,6 +256,16 @@ exports.addPublicComment = async (req, res, next) => {
 
     await blog.save();
 
+    await writeAuditLog({
+      req,
+      action: 'blog.comment_add',
+      targetModel: 'Blog',
+      targetId: blog._id,
+      targetLabel: blog.title,
+      actorLabel: payload.name,
+      detail: { visibility: 'public', isReply: Boolean(parentComment) },
+    });
+
     res.status(201).json({ message: 'Comment added successfully', comment: parentComment ? payload : blog.comments[blog.comments.length - 1] });
 
     setImmediate(async () => {
@@ -388,6 +398,14 @@ exports.addInternalReviewNote = async (req, res, next) => {
     await blog.save();
 
     const createdNote = blog.comments[blog.comments.length - 1];
+    await writeAuditLog({
+      req,
+      action: 'blog.comment_add',
+      targetModel: 'Blog',
+      targetId: blog._id,
+      targetLabel: blog.title,
+      detail: { visibility: 'internal' },
+    });
     res.status(201).json({ message: 'Internal review note added successfully', comment: createdNote });
   } catch (error) {
     next(error);
@@ -436,7 +454,7 @@ exports.markChangeImplemented = async (req, res, next) => {
 
     await blog.save();
 
-    writeAuditLog({
+    await writeAuditLog({
       req,
       action: 'blog.mark_change_implemented',
       targetModel: 'Blog',
@@ -466,12 +484,13 @@ exports.hideComment = async (req, res) => {
   comment.isVisible = false;
   await blog.save();
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'blog.comment_hide',
     targetModel: 'Blog',
     targetId: blog._id,
     targetLabel: blog.title,
+    detail: { commentId: String(comment._id) },
   });
 
   res.json({ message: 'Comment hidden successfully', comment });
@@ -488,12 +507,13 @@ exports.unhideComment = async (req, res) => {
   comment.isVisible = true;
   await blog.save();
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'blog.comment_unhide',
     targetModel: 'Blog',
     targetId: blog._id,
     targetLabel: blog.title,
+    detail: { commentId: String(comment._id) },
   });
 
   res.json({ message: 'Comment unhidden successfully', comment });
@@ -511,12 +531,13 @@ exports.deleteComment = async (req, res) => {
   comment.isVisible = false;
   await blog.save();
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'blog.comment_delete',
     targetModel: 'Blog',
     targetId: blog._id,
     targetLabel: blog.title,
+    detail: { commentId: String(comment._id) },
   });
 
   res.json({ message: 'Comment deleted successfully' });
@@ -584,6 +605,15 @@ exports.respondToEditorConsent = async (req, res, next) => {
       return res.status(409).json({ error: 'This proposal was already decided or changed. Reload and try again.' });
     }
 
+    await writeAuditLog({
+      req,
+      action: isApproved ? 'blog.editor_changes_accepted' : 'blog.editor_changes_rejected',
+      targetModel: 'Blog',
+      targetId: blog._id,
+      targetLabel: blog.title,
+      detail: { version: proposal.version ?? null, note: decisionNote || null },
+    });
+
     res.json({
       message: isApproved
         ? 'Editor changes accepted and applied. The blog is ready for publishing.'
@@ -616,16 +646,8 @@ exports.respondToEditorConsent = async (req, res, next) => {
           });
         }
 
-        writeAuditLog({
-          req,
-          action: isApproved ? 'blog.editor_changes_accepted' : 'blog.editor_changes_rejected',
-          targetModel: 'Blog',
-          targetId: blog._id,
-          targetLabel: blog.title,
-          detail: { version: proposal.version ?? null, note: decisionNote || null },
-        });
       } catch (asyncErr) {
-        console.error('Non-blocking editor decision email/audit failed:', asyncErr.message);
+        console.error('Non-blocking editor decision email failed:', asyncErr.message);
       }
     });
   } catch (error) {
@@ -796,7 +818,7 @@ exports.createBlog = async (req, res) => {
     status: 'draft',
   });
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'blog.create',
     targetModel: 'Blog',
@@ -856,23 +878,47 @@ exports.updateBlog = async (req, res) => {
     try { modal = JSON.parse(modal); } catch (e) {}
   }
 
+  const updatedFields = new Set();
   const prevTitle = blog.title;
   if (title) {
     blog.title = title;
+    updatedFields.add('title');
     if (title !== prevTitle) {
       blog.slug = await generateSlug(title, blog._id);
     }
   }
-  if (tag) blog.tag = tag;
-  if (excerpt !== undefined) blog.excerpt = excerpt;
-  if (excerptBlocks) blog.excerptBlocks = Array.isArray(excerptBlocks) ? excerptBlocks : blog.excerptBlocks;
-  if (socialHandle) blog.socialHandle = socialHandle;
-  if (organizationLink) blog.organizationLink = organizationLink;
-  if (modal) blog.modal = modal;
-  if (blocks) blog.blocks = Array.isArray(blocks) ? blocks : blog.blocks;
+  if (tag) {
+    blog.tag = tag;
+    updatedFields.add('tag');
+  }
+  if (excerpt !== undefined) {
+    blog.excerpt = excerpt;
+    updatedFields.add('excerpt');
+  }
+  if (excerptBlocks) {
+    blog.excerptBlocks = Array.isArray(excerptBlocks) ? excerptBlocks : blog.excerptBlocks;
+    updatedFields.add('excerptBlocks');
+  }
+  if (socialHandle) {
+    blog.socialHandle = socialHandle;
+    updatedFields.add('socialHandle');
+  }
+  if (organizationLink) {
+    blog.organizationLink = organizationLink;
+    updatedFields.add('organizationLink');
+  }
+  if (modal) {
+    blog.modal = modal;
+    updatedFields.add('modal');
+  }
+  if (blocks) {
+    blog.blocks = Array.isArray(blocks) ? blocks : blog.blocks;
+    updatedFields.add('blocks');
+  }
 
   if (typeof bodyHtml === 'string') {
     blog.bodyHtml = bodyHtml;
+    updatedFields.add('bodyHtml');
   }
 
   // Only the writer's own saves make them the current author. An editor or admin who saves the story never takes it over.
@@ -888,11 +934,13 @@ exports.updateBlog = async (req, res) => {
     destroyAsset(blog.imgPublicId, 'image');
     blog.img = imgFile.path;
     blog.imgPublicId = imgFile.filename || imgFile.public_id || '';
+    updatedFields.add('coverImage');
   } else if (typeof bodyImgUrl === 'string' && bodyImgUrl.trim()) {
     blog.img = bodyImgUrl.trim();
     if (req.body.imgPublicId) {
       blog.imgPublicId = req.body.imgPublicId;
     }
+    updatedFields.add('coverImage');
   }
 
   if (docFile) {
@@ -900,10 +948,12 @@ exports.updateBlog = async (req, res) => {
     blog.documentUrl = docFile.path;
     blog.documentPublicId = docFile.filename || docFile.public_id || '';
     blog.documentName = docFile.originalname;
+    updatedFields.add('document');
   } else if (req.body.documentUrl) {
     blog.documentUrl = req.body.documentUrl;
     if (req.body.documentPublicId) blog.documentPublicId = req.body.documentPublicId;
     if (req.body.documentName) blog.documentName = req.body.documentName;
+    updatedFields.add('document');
   }
 
   const inlineFiles = req.files?.images || [];
@@ -911,6 +961,7 @@ exports.updateBlog = async (req, res) => {
     try {
       blog.blocks = applyUploadedImagesToBlocks(Array.isArray(blog.blocks) ? blog.blocks : [], inlineFiles);
       blog.excerptBlocks = applyUploadedImagesToBlocks(Array.isArray(blog.excerptBlocks) ? blog.excerptBlocks : [], inlineFiles);
+      updatedFields.add('inlineImages');
     } catch (e) {
       console.error('Failed to apply uploaded inline images:', e.message);
     }
@@ -927,12 +978,13 @@ exports.updateBlog = async (req, res) => {
 
   await blog.save();
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'blog.update',
     targetModel: 'Blog',
     targetId: blog._id,
     targetLabel: blog.title,
+    detail: { updatedFields: [...updatedFields] },
   });
 
   res.json({ message: 'Blog updated successfully', blog });
@@ -958,7 +1010,7 @@ exports.deleteBlog = async (req, res) => {
 
   await invalidatePublicBlogsCache();
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'blog.delete',
     targetModel: 'Blog',
@@ -982,7 +1034,7 @@ exports.restoreBlog = async (req, res) => {
 
   await blog.save();
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'blog.restore',
     targetModel: 'Blog',
@@ -1003,7 +1055,7 @@ exports.hardDeleteBlog = async (req, res) => {
   destroyAsset(blog.documentPublicId, 'raw');
   await blog.deleteOne();
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'blog.hard_delete',
     targetModel: 'Blog',
@@ -1076,7 +1128,7 @@ exports.submitBlog = async (req, res) => {
   blog.submittedAt = new Date();
   await blog.save();
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'blog.submit',
     targetModel: 'Blog',
@@ -1142,6 +1194,15 @@ exports.reviewBlog = async (req, res, next) => {
 
     await blog.save();
 
+    await writeAuditLog({
+      req,
+      action: 'blog.review',
+      targetModel: 'Blog',
+      targetId: blog._id,
+      targetLabel: blog.title,
+      detail: { decision },
+    });
+
     // Email the author before responding, so a failed send is reported to the reviewer instead of only logged.
     // The decision is already saved, so a failed email does not undo it.
     let authorNotified = false;
@@ -1206,14 +1267,6 @@ exports.reviewBlog = async (req, res, next) => {
           });
         }
 
-        writeAuditLog({
-          req,
-          action: 'blog.review',
-          targetModel: 'Blog',
-          targetId: blog._id,
-          targetLabel: blog.title,
-          detail: { decision, note: note || null },
-        });
       } catch (asyncErr) {
         console.error('Non-blocking review side-effects error:', asyncErr.message);
       }
@@ -1251,6 +1304,14 @@ exports.publishBlog = async (req, res, next) => {
 
     await invalidatePublicBlogsCache();
 
+    await writeAuditLog({
+      req,
+      action: 'blog.publish',
+      targetModel: 'Blog',
+      targetId: existing._id,
+      targetLabel: existing.title,
+    });
+
     res.json({ message: 'Blog is now live on the website', blog });
 
     setImmediate(async () => {
@@ -1258,14 +1319,6 @@ exports.publishBlog = async (req, res, next) => {
         if (existing.originalAuthor?.email) {
           await sendBlogPublishedEmail(existing.originalAuthor.email, existing.originalAuthor.firstName, existing.title, existing.slug);
         }
-
-        writeAuditLog({
-          req,
-          action: 'blog.publish',
-          targetModel: 'Blog',
-          targetId: existing._id,
-          targetLabel: existing.title,
-        });
 
         blogEventBus.emit('blog:published', { blog: existing, userId: req.user.id });
       } catch (asyncErr) {
@@ -1311,6 +1364,15 @@ exports.unpublishBlog = async (req, res, next) => {
 
     await invalidatePublicBlogsCache();
 
+    await writeAuditLog({
+      req,
+      action: 'blog.unpublish',
+      targetModel: 'Blog',
+      targetId: existing._id,
+      targetLabel: existing.title,
+      detail: { note: note || null },
+    });
+
     res.json({
       message: 'Blog removed from the public website. It is back in approved status.',
       blog,
@@ -1318,15 +1380,6 @@ exports.unpublishBlog = async (req, res, next) => {
 
     setImmediate(() => {
       try {
-        writeAuditLog({
-          req,
-          action: 'blog.unpublish',
-          targetModel: 'Blog',
-          targetId: existing._id,
-          targetLabel: existing.title,
-          detail: { note: note || null },
-        });
-
         blogEventBus.emit('blog:unpublished', { blog: existing, userId: req.user.id });
       } catch (asyncErr) {
         console.error('Non-blocking unpublish side-effects error:', asyncErr.message);

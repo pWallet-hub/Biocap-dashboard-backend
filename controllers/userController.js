@@ -3,6 +3,7 @@ const Blog = require('../models/Blog');
 const { parsePagination, paginatedResponse } = require('../utils/pagination');
 const { EXTERNAL_CREATORS, REVIEWERS, ROLES, ORGANIZATIONS } = require('../constants/roles');
 const { validateUserReview } = require('../middleware/validateUserInput');
+const { writeAuditLog } = require('../utils/auditLogger');
 
 const USER_LIST_SELECT = '-password';
 const USER_DETAIL_POPULATE = { path: 'createdBy', select: 'username firstName lastName' };
@@ -199,6 +200,18 @@ exports.register = async (req, res) => {
     // Save with validateModifiedOnly to bypass un-edited legacy properties
     await user.save({ validateModifiedOnly: true });
 
+    await writeAuditLog({
+      req,
+      actor: user._id,
+      actorRole: user.role,
+      actorLabel: user.username,
+      action: 'user.create',
+      targetModel: 'User',
+      targetId: user._id,
+      targetLabel: user.username,
+      detail: { selfRegistration: true, role: user.role },
+    });
+
     const { password: _, ...safeUser } = user.toObject();
 
     res.status(201).json({
@@ -292,6 +305,15 @@ exports.reviewUser = async (req, res) => {
     }
 
     await user.save({ validateModifiedOnly: true });
+
+    await writeAuditLog({
+      req,
+      action: 'user.review',
+      targetModel: 'User',
+      targetId: user._id,
+      targetLabel: user.username,
+      detail: { decision, noteProvided: Boolean(note?.trim()) },
+    });
 
     const { password, ...safeUser } = user.toObject();
     res.json({

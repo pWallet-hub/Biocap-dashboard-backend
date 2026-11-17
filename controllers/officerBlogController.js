@@ -235,7 +235,7 @@ exports.addArticleComment = async (req, res) => {
     }
   }
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'blog.comment_add',
     targetModel: 'Blog',
@@ -289,7 +289,7 @@ exports.acceptEditorChanges = async (req, res) => {
     );
   }
 
-  writeAuditLog({
+  await writeAuditLog({
     req,
     action: 'blog.accept_editor_changes',
     targetModel: 'Blog',

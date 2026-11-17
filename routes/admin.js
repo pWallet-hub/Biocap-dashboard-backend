@@ -21,13 +21,21 @@ router.use(protect);
  * @swagger
  * /api/admin/dashboard:
  *   get:
- *     summary: Platform overview — user stats, blog stats, pending queues, recent logins
+ *     summary: Platform overview with statistics, recent logins, and recent audited actions
  *     tags: [Admin Management]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Dashboard summary data
+ *         description: Dashboard summary. recentActivity.actions contains the ten most recent audit entries.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AdminDashboardResponse'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
  */
 router.get('/dashboard', adminOnly, asyncHandler(adminController.getDashboardStats));
 
@@ -313,38 +321,69 @@ router.delete('/users/:id', adminOnly, asyncHandler(adminController.deleteUser))
  * @swagger
  * /api/admin/audit-logs:
  *   get:
- *     summary: Full paginated audit trail of all system actions
+ *     summary: Search the paginated system audit trail (admin only)
+ *     description: >
+ *       Returns successful action records newest first. Events include account creation, profile and role changes,
+ *       account status changes, profile reviews, authentication/password events, blog lifecycle and editorial
+ *       workflow, comment moderation, and gallery lifecycle actions. Failed requests are not represented as
+ *       successful business actions. Credential request fields and raw request bodies are excluded; selected
+ *       workflow actions may include business notes in detail. Historical events from before audit coverage was
+ *       added cannot be reconstructed.
  *     tags: [Admin Management]
  *     security:
  *       - bearerAuth: []
  *     parameters:
  *       - in: query
  *         name: action
- *         schema: { type: string }
+ *         description: Exact namespaced action filter.
+ *         schema:
+ *           type: string
+ *           example: user.create
  *       - in: query
  *         name: actor
- *         schema: { type: string }
+ *         description: MongoDB ID of the user who performed the action.
+ *         schema: { type: string, example: 66a12345bc67890123456789 }
+ *       - in: query
+ *         name: actorRole
+ *         description: Role captured at the time of the action.
+ *         schema:
+ *           type: string
+ *           enum: [admin, communication_officer, editor, social_media_content_creator, media_correspondent, principal_investigator, system, anonymous]
  *       - in: query
  *         name: targetModel
- *         schema: { type: string, enum: [Blog, User] }
+ *         description: Type of entity affected.
+ *         schema: { type: string, enum: [Blog, User, Gallery] }
  *       - in: query
  *         name: targetId
- *         schema: { type: string }
+ *         description: MongoDB ID of the affected entity.
+ *         schema: { type: string, example: 66b98765dc43210987654321 }
  *       - in: query
  *         name: from
- *         schema: { type: string, format: date }
+ *         description: Include events at or after this ISO-8601 timestamp.
+ *         schema: { type: string, format: date-time, example: '2026-11-01T00:00:00.000Z' }
  *       - in: query
  *         name: to
- *         schema: { type: string, format: date }
+ *         description: Include events at or before this ISO-8601 timestamp.
+ *         schema: { type: string, format: date-time, example: '2026-11-17T23:59:59.999Z' }
  *       - in: query
  *         name: page
- *         schema: { type: integer }
+ *         description: 1-based page number. Defaults to 1.
+ *         schema: { type: integer, minimum: 1, default: 1 }
  *       - in: query
  *         name: limit
- *         schema: { type: integer }
+ *         description: Results per page; defaults to 20 and is capped at 100.
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
  *     responses:
  *       200:
- *         description: Audit logs list
+ *         description: Audit events with populated actor profiles and pagination metadata.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AuditLogListResponse'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
  */
 router.get('/audit-logs', adminOnly, asyncHandler(adminController.getAuditLogs));
 
@@ -352,7 +391,11 @@ router.get('/audit-logs', adminOnly, asyncHandler(adminController.getAuditLogs))
  * @swagger
  * /api/admin/audit-logs/blog/{id}:
  *   get:
- *     summary: Full change history for a specific blog
+ *     summary: Retrieve the full action history for a blog
+ *     description: >
+ *       Returns all recorded actions targeting this blog, newest first, in the { count, logs } response shape.
+ *       This endpoint is not paginated; use GET /api/admin/audit-logs with targetModel=Blog and targetId for
+ *       pagination and filtering. Records include actor snapshot, action, optional details, and request metadata.
  *     tags: [Admin Management]
  *     security:
  *       - bearerAuth: []
@@ -363,15 +406,64 @@ router.get('/audit-logs', adminOnly, asyncHandler(adminController.getAuditLogs))
  *         schema: { type: string }
  *     responses:
  *       200:
- *         description: Blog audit logs
+ *         description: Blog audit history.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/BlogAuditTrailResponse'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
  */
 router.get('/audit-logs/blog/:id', adminOnly, asyncHandler(adminController.getBlogAuditTrail));
 
 /**
  * @swagger
+ * /api/admin/audit-logs/gallery/{id}:
+ *   get:
+ *     summary: Retrieve paginated action history for a gallery item
+ *     description: Returns recorded creation, update, publish, unpublish, and delete events targeting this gallery item, newest first.
+ *     tags: [Admin Management]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: page
+ *         description: 1-based page number. Defaults to 1.
+ *         schema: { type: integer, minimum: 1, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         description: Results per page; defaults to 20 and is capped at 100.
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+ *     responses:
+ *       200:
+ *         description: Paginated gallery audit history.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/AuditLogListResponse'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
+ */
+router.get('/audit-logs/gallery/:id', adminOnly, asyncHandler(adminController.getGalleryAuditTrail));
+
+/**
+ * @swagger
  * /api/admin/audit-logs/user/{id}:
  *   get:
- *     summary: Full change history for a specific user (both as target and as actor)
+ *     summary: Retrieve actions affecting a user and actions performed by them
+ *     description: >
+ *       actionsOnThisUser contains recorded events targeting this account. actionsPerformedByThisUser contains
+ *       recorded events performed by the account. Actor names and roles are included where available. Records
+ *       remain available after the user is deleted because the audit event stores an actor label snapshot.
+ *       Response arrays are not paginated; use the global audit endpoint with actor or targetId for pagination.
  *     tags: [Admin Management]
  *     security:
  *       - bearerAuth: []
@@ -382,7 +474,15 @@ router.get('/audit-logs/blog/:id', adminOnly, asyncHandler(adminController.getBl
  *         schema: { type: string }
  *     responses:
  *       200:
- *         description: User audit logs
+ *         description: User history grouped by target and actor.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/UserAuditTrailResponse'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       403:
+ *         $ref: '#/components/responses/ForbiddenError'
  */
 router.get('/audit-logs/user/:id', adminOnly, asyncHandler(adminController.getUserAuditTrail));
 
