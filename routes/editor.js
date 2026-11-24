@@ -121,6 +121,7 @@ router.get('/blogs/:id', asyncHandler(officerBlogController.getBlogById));
  * /api/editor/blogs:
  *   post:
  *     summary: Create a new blog post as an Editor
+ *     description: Creates the story as a draft, which may be incomplete. Completeness is checked on submit.
  *     tags: [Communication Editor]
  *     security:
  *       - bearerAuth: []
@@ -130,7 +131,6 @@ router.get('/blogs/:id', asyncHandler(officerBlogController.getBlogById));
  *         multipart/form-data:
  *           schema:
  *             type: object
- *             required: [title, tag, excerpt, img]
  *             properties:
  *               title: { type: string }
  *               tag: { type: string }
@@ -145,7 +145,7 @@ router.get('/blogs/:id', asyncHandler(officerBlogController.getBlogById));
  *               document: { type: string, format: binary }
  *     responses:
  *       201:
- *         description: Article created successfully
+ *         description: Draft created
  */
 router.post('/blogs', blogUploadFields, parseBlogBody, asyncHandler(blogController.createBlog));
 

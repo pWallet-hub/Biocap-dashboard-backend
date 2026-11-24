@@ -88,6 +88,10 @@ router.get('/my-blogs/:id', asyncHandler(creatorController.getMyBlogById));
  * /api/contributor/blogs:
  *   post:
  *     summary: Create new blog draft
+ *     description: |
+ *       Creates the story as a draft. A draft may be incomplete, so the editor can autosave from the first keystroke:
+ *       send any of the fields below (at least one). Completeness is checked when the draft is submitted.
+ *       Images may be sent as files (multipart) or as already-uploaded Cloudinary URLs (JSON: img + imgPublicId).
  *     tags: [Content Creator]
  *     security:
  *       - bearerAuth: []
@@ -97,7 +101,6 @@ router.get('/my-blogs/:id', asyncHandler(creatorController.getMyBlogById));
  *         multipart/form-data:
  *           schema:
  *             type: object
- *             required: [title, tag, excerpt, img]
  *             properties:
  *               title: { type: string }
  *               tag: { type: string }
@@ -113,7 +116,8 @@ router.get('/my-blogs/:id', asyncHandler(creatorController.getMyBlogById));
  *                 description: "Array of inline section images"
  *               document: { type: string, format: binary }
  *     responses:
- *       201: { description: Draft created }
+ *       201: { description: Draft created. The Location header holds the new story's URL. }
+ *       400: { description: Empty draft or invalid data }
  */
 router.post('/blogs', uploadBlogFiles, parseBlogBody, asyncHandler(blogController.createBlog));
 
@@ -121,7 +125,11 @@ router.post('/blogs', uploadBlogFiles, parseBlogBody, asyncHandler(blogControlle
  * @swagger
  * /api/contributor/blogs/{id}:
  *   put:
- *     summary: Update existing draft or rejected blog
+ *     summary: Update (autosave) an existing draft
+ *     description: |
+ *       Updates only the fields that are sent. On a draft a sent field may be blank to clear it,
+ *       and `img: null` removes the cover. On a story past draft, blank required fields are refused (400).
+ *       Used by the story editor to autosave drafts.
  *     tags: [Content Creator]
  *     security:
  *       - bearerAuth: []
@@ -169,6 +177,17 @@ router.put('/blogs/:id', uploadBlogFiles, parseBlogBody, asyncHandler(blogContro
  *         schema: { type: string }
  *     responses:
  *       200: { description: Blog submitted }
+ *       422:
+ *         description: The draft is incomplete. `missingFields` lists what is still needed.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error: { type: string }
+ *                 missingFields:
+ *                   type: array
+ *                   items: { type: string, enum: [title, tag, img, content, socialHandle, organizationLink] }
  */
 router.patch('/blogs/:id/submit', asyncHandler(blogController.submitBlog));
 

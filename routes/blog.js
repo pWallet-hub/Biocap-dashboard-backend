@@ -429,6 +429,10 @@ router.get('/:id', requireObjectId, protect, asyncHandler(blogController.getBlog
  * /api/blogs:
  *   post:
  *     summary: Create a blog post (always starts as draft). Supports cover image, inline section images, and optional PDF upload.
+ *     description: |
+ *       Creates the story as a draft. A draft may be incomplete, so the editor can autosave from the first keystroke:
+ *       send any of the fields below (at least one). Completeness is checked when the draft is submitted.
+ *       Images may be sent as files (multipart) or as already-uploaded Cloudinary URLs (JSON: img + imgPublicId).
  *     tags: [Blogs]
  *     security:
  *       - bearerAuth: []
@@ -438,7 +442,6 @@ router.get('/:id', requireObjectId, protect, asyncHandler(blogController.getBlog
  *         multipart/form-data:
  *           schema:
  *             type: object
- *             required: [title, tag, excerpt, img]
  *             properties:
  *               title: { type: string }
  *               tag: { type: string }
@@ -446,15 +449,15 @@ router.get('/:id', requireObjectId, protect, asyncHandler(blogController.getBlog
  *               blocks: { type: string, description: "JSON-stringified array of section blocks" }
  *               socialHandle: { type: string, description: "Required for social_media_influencer" }
  *               organizationLink: { type: string, description: "Required for broadcast_media" }
- *               img: { type: string, format: binary, description: "Cover image (required)" }
+ *               img: { type: string, format: binary, description: "Cover image (required before submitting)" }
  *               images: 
  *                 type: array
  *                 items: { type: string, format: binary }
  *                 description: "Array of inline section images"
  *               document: { type: string, format: binary, description: "Optional supporting PDF" }
  *     responses:
- *       201: { description: Blog created as draft }
- *       400: { description: Missing image or invalid data }
+ *       201: { description: Blog created as draft. The Location header holds the new story's URL. }
+ *       400: { description: Empty draft or invalid data }
  */
 router.post(
   '/',
@@ -472,6 +475,10 @@ router.post(
  * /api/blogs/{id}:
  *   put:
  *     summary: Update a blog. Permission depends on role and blog status.
+ *     description: |
+ *       Updates only the fields that are sent. On a draft a sent field may be blank to clear it,
+ *       and `img: null` removes the cover. On a story past draft, blank required fields are refused (400).
+ *       Used by the story editor to autosave drafts.
  *     tags: [Blogs]
  *     security:
  *       - bearerAuth: []
@@ -590,6 +597,17 @@ router.delete('/:id/hard-delete', protect, adminOnly, asyncHandler(blogControlle
  *       200: { description: Blog submitted for review }
  *       400: { description: Blog not in draft status }
  *       403: { description: Not your blog }
+ *       422:
+ *         description: The draft is incomplete. `missingFields` lists what is still needed.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error: { type: string }
+ *                 missingFields:
+ *                   type: array
+ *                   items: { type: string, enum: [title, tag, img, content, socialHandle, organizationLink] }
  */
 router.patch('/:id/submit', protect, authorize(...CREATORS), asyncHandler(blogController.submitBlog));
 

@@ -138,12 +138,18 @@ const EditorProposalRecordSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// Drafts are saved while the writer is still working, so they may be incomplete.
+// Everything a story needs is required once it leaves 'draft' (see getSubmissionErrors).
+function requiredUnlessDraft() {
+  return this.status !== 'draft';
+}
+
 // ─── Main Blog Post Schema ───────────────────────────────────────────────────
 const BlogSchema = new mongoose.Schema(
   {
-    title: { type: String, required: true, trim: true },
+    title: { type: String, required: requiredUnlessDraft, trim: true },
     slug: { type: String, unique: true, lowercase: true, trim: true },
-    tag: { type: String, required: true, trim: true },
+    tag: { type: String, required: requiredUnlessDraft, trim: true },
     
     // Excerpt text & optional structured blocks
     excerpt: { type: String, trim: true },
@@ -157,8 +163,8 @@ const BlogSchema = new mongoose.Schema(
     modal: { type: ModalSchema, default: {} },
 
     // Cover image & Cloudinary public identifier
-    img: { type: String, required: true },
-    imgPublicId: { type: String, required: true },
+    img: { type: String, required: requiredUnlessDraft },
+    imgPublicId: { type: String, required: requiredUnlessDraft },
 
     // Optional supporting PDF document
     documentUrl: { type: String },
@@ -240,6 +246,9 @@ BlogSchema.index({ isDeleted: 1, status: 1 });
 
 // ─── Pre-validate hook ───────────────────────────────────────────────────────
 BlogSchema.pre('validate', function () {
+  // A draft may be saved before the author's links are filled in; submitBlog checks them.
+  if (this.status === 'draft') return;
+
   const socialRole = ROLES?.SOCIAL_MEDIA_CONTENT_CREATOR || 'social_media_content_creator';
   const mediaRole = ROLES?.MEDIA_CORRESPONDENT || 'media_correspondent';
   const legacyMediaRole = ROLES?.BROADCAST_CONTENT_CREATOR || 'broadcast_content_creator';
@@ -261,6 +270,32 @@ BlogSchema.pre('validate', function () {
 const getObjectIdString = (field) => {
   if (!field) return '';
   return field._id ? field._id.toString() : field.toString();
+};
+
+/**
+ * Lists the fields a draft still needs before it can be submitted for review.
+ * Returns an empty array when the story is complete.
+ */
+BlogSchema.methods.getSubmissionErrors = function () {
+  const isBlank = (value) => typeof value !== 'string' || !value.trim();
+  const missing = [];
+
+  if (isBlank(this.title)) missing.push('title');
+  if (isBlank(this.tag)) missing.push('tag');
+  if (isBlank(this.img) || isBlank(this.imgPublicId)) missing.push('img');
+
+  const hasContent =
+    !isBlank(this.excerpt) ||
+    (Array.isArray(this.excerptBlocks) && this.excerptBlocks.length > 0) ||
+    (Array.isArray(this.blocks) && this.blocks.length > 0);
+  if (!hasContent) missing.push('content');
+
+  const socialRole = ROLES?.SOCIAL_MEDIA_CONTENT_CREATOR || 'social_media_content_creator';
+  const mediaRoles = [ROLES?.MEDIA_CORRESPONDENT || 'media_correspondent', ROLES?.BROADCAST_CONTENT_CREATOR || 'broadcast_content_creator'];
+  if (this.authorRole === socialRole && isBlank(this.socialHandle)) missing.push('socialHandle');
+  if (mediaRoles.includes(this.authorRole) && isBlank(this.organizationLink)) missing.push('organizationLink');
+
+  return missing;
 };
 
 /**

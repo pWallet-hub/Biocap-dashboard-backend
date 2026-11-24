@@ -758,11 +758,7 @@ exports.createBlog = async (req, res) => {
   const bodyData = req.parsedBody || req.body || {};
   let { title, tag, excerpt, excerptBlocks, socialHandle, organizationLink, modal, blocks, bodyHtml, img: bodyImgUrl } = bodyData;
 
-  const coverImageUrl = imgFile ? imgFile.path : (typeof bodyImgUrl === 'string' && bodyImgUrl.trim() ? bodyImgUrl.trim() : null);
-
-  if (!coverImageUrl) {
-    return res.status(400).json({ error: 'A cover image is required' });
-  }
+  const coverImageUrl = imgFile ? imgFile.path : (typeof bodyImgUrl === 'string' && bodyImgUrl.trim() ? bodyImgUrl.trim() : undefined);
 
   if (typeof blocks === 'string') {
     try { blocks = JSON.parse(blocks); } catch (e) { blocks = []; }
@@ -774,14 +770,20 @@ exports.createBlog = async (req, res) => {
     try { modal = JSON.parse(modal); } catch (e) { modal = {}; }
   }
 
-  if (!title || !tag || (!(excerpt && excerpt.trim()) && (!Array.isArray(excerptBlocks) || excerptBlocks.length === 0) && (!Array.isArray(blocks) || blocks.length === 0))) {
-    return res.status(400).json({ error: 'title, tag, and at least one of excerpt/excerptBlocks/blocks is required' });
+  // Every new story starts as a draft, which may be incomplete; submitBlog checks it is complete.
+  // An entirely empty draft is still refused.
+  const hasAnyContent =
+    Boolean(title || tag || (excerpt && excerpt.trim()) || coverImageUrl || docFile || bodyHtml) ||
+    (Array.isArray(blocks) && blocks.length > 0) ||
+    (Array.isArray(excerptBlocks) && excerptBlocks.length > 0);
+  if (!hasAnyContent) {
+    return res.status(400).json({ error: 'A draft needs at least a title, category, cover image or some content' });
   }
 
   const author = await User.findById(req.user.id).select('socialHandle organizationLink role jobTitle').lean();
   const slug = await generateSlug(title);
 
-  const imgPublicId = imgFile ? (imgFile.filename || imgFile.public_id || '') : (req.body.imgPublicId || '');
+  const imgPublicId = imgFile ? (imgFile.filename || imgFile.public_id || undefined) : (bodyData.imgPublicId || undefined);
   const docPublicId = docFile ? (docFile.filename || docFile.public_id || '') : (req.body.documentPublicId || '');
 
   const inlineFiles = req.files?.images || [];
@@ -838,7 +840,7 @@ exports.createBlog = async (req, res) => {
     }
   }
 
-  res.status(201).json({ message: 'Created successfully', blog });
+  res.location(`/api/blogs/${blog._id}`).status(201).json({ message: 'Draft created', blog });
 };
 
 exports.updateBlog = async (req, res) => {
@@ -878,16 +880,18 @@ exports.updateBlog = async (req, res) => {
     try { modal = JSON.parse(modal); } catch (e) {}
   }
 
+  // A field that was sent is applied even when blank, so a draft can be cleared while it is written.
+  // Blank required fields on a story that is past 'draft' are refused by the model's validation.
   const updatedFields = new Set();
   const prevTitle = blog.title;
-  if (title) {
+  if (title !== undefined) {
     blog.title = title;
     updatedFields.add('title');
-    if (title !== prevTitle) {
+    if (title && title !== prevTitle) {
       blog.slug = await generateSlug(title, blog._id);
     }
   }
-  if (tag) {
+  if (tag !== undefined) {
     blog.tag = tag;
     updatedFields.add('tag');
   }
@@ -899,11 +903,11 @@ exports.updateBlog = async (req, res) => {
     blog.excerptBlocks = Array.isArray(excerptBlocks) ? excerptBlocks : blog.excerptBlocks;
     updatedFields.add('excerptBlocks');
   }
-  if (socialHandle) {
+  if (socialHandle !== undefined) {
     blog.socialHandle = socialHandle;
     updatedFields.add('socialHandle');
   }
-  if (organizationLink) {
+  if (organizationLink !== undefined) {
     blog.organizationLink = organizationLink;
     updatedFields.add('organizationLink');
   }
@@ -937,9 +941,15 @@ exports.updateBlog = async (req, res) => {
     updatedFields.add('coverImage');
   } else if (typeof bodyImgUrl === 'string' && bodyImgUrl.trim()) {
     blog.img = bodyImgUrl.trim();
-    if (req.body.imgPublicId) {
-      blog.imgPublicId = req.body.imgPublicId;
+    if (bodyData.imgPublicId) {
+      blog.imgPublicId = bodyData.imgPublicId;
     }
+    updatedFields.add('coverImage');
+  } else if (bodyImgUrl === null || bodyImgUrl === '') {
+    // Removes the cover. Only a draft may be without one; the model refuses this for other statuses.
+    // The Cloudinary asset is kept, as with a replaced cover, since revision history may still show it.
+    blog.img = undefined;
+    blog.imgPublicId = undefined;
     updatedFields.add('coverImage');
   }
 
@@ -1120,6 +1130,15 @@ exports.submitBlog = async (req, res) => {
   }
   if (blog.status !== 'draft') {
     return res.status(400).json({ error: `Cannot submit a blog in "${blog.status}" status` });
+  }
+
+  // Drafts may be saved incomplete. Only a complete story enters the review queue.
+  const missingFields = blog.getSubmissionErrors();
+  if (missingFields.length > 0) {
+    return res.status(422).json({
+      error: `This draft is not ready for review. Missing: ${missingFields.join(', ')}`,
+      missingFields,
+    });
   }
 
   const wasRejectedBefore = blog.reviewHistory.some((r) => r.decision === 'rejected');
